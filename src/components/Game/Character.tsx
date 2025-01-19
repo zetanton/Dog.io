@@ -27,6 +27,7 @@ interface CharacterState {
   hasWon: boolean;
   isJumping: boolean;
   jumpVelocity: number;
+  barkCooldown: number;
 }
 
 export class Character {
@@ -73,6 +74,7 @@ export class Character {
   private lastDirection: THREE.Vector3 | null = null;
   private lastAttacker: Character | null = null;
   private revengeTimer: number = 0;
+  private readonly BARK_COOLDOWN = 2; // 2 seconds cooldown
 
   static readonly DOG_COLORS = [
     new THREE.Color(0x8B4513), // Brown
@@ -116,6 +118,7 @@ export class Character {
       hasWon: false,
       isJumping: false,
       jumpVelocity: 0,
+      barkCooldown: 0,
     };
 
     this.dog = this.createDog();
@@ -436,6 +439,11 @@ export class Character {
     this.players = allPlayers || null;
     this.state.animationTime += deltaTime;
 
+    // Update bark cooldown
+    if (this.state.barkCooldown > 0) {
+      this.state.barkCooldown = Math.max(0, this.state.barkCooldown - deltaTime);
+    }
+
     // Handle death animation
     if (this.state.isDying) {
       this.animateDeath(deltaTime);
@@ -460,39 +468,50 @@ export class Character {
     if (this.isAI) {
       this.handleAI(deltaTime, collidables, collidableBoxes);
     } else {
-      // Handle jumping
+      // Handle keyboard input for player character
+      const moveDirection = new THREE.Vector3();
+
+      if (keys['w'] || keys['ArrowUp']) {
+        moveDirection.z -= 1;
+      }
+      if (keys['s'] || keys['ArrowDown']) {
+        moveDirection.z += 1;
+      }
+      if (keys['a'] || keys['ArrowLeft']) {
+        moveDirection.x -= 1;
+      }
+      if (keys['d'] || keys['ArrowRight']) {
+        moveDirection.x += 1;
+      }
       if (keys[' '] && !this.state.isJumping) {
         this.state.isJumping = true;
         this.state.jumpVelocity = this.JUMP_FORCE;
       }
-
-      // Calculate movement direction
-      let moveX = 0;
-      let moveZ = 0;
-      
-      if (keys['w']) moveZ -= 1;
-      if (keys['s']) moveZ += 1;
-      if (keys['a']) moveX -= 1;
-      if (keys['d']) moveX += 1;
+      if (keys['r'] && this.state.barkCooldown <= 0) {
+        AudioManager.getInstance().playBarkSound();
+        this.state.barkCooldown = this.BARK_COOLDOWN;
+      }
 
       // Update movement and facing direction
-      if (moveX !== 0 || moveZ !== 0) {
+      if (moveDirection.length() > 0) {
         this.state.isMoving = true;
         // Immediately face movement direction
-        this.state.rotation = Math.atan2(moveX, moveZ) + Math.PI;
+        this.state.rotation = Math.atan2(moveDirection.x, moveDirection.z) + Math.PI;
         
         // Calculate new position
         const moveSpeed = this.MOVE_SPEED * (1.5 / this.state.size);
         const newPosition = new THREE.Vector3(
-          this.state.position.x + moveX * moveSpeed,
+          this.state.position.x + moveDirection.x * moveSpeed,
           this.state.position.y,
-          this.state.position.z + moveZ * moveSpeed
+          this.state.position.z + moveDirection.z * moveSpeed
         );
 
         // Only update position if there's no collision
         if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
           this.state.position.x = newPosition.x;
           this.state.position.z = newPosition.z;
+        } else {
+          this.state.isMoving = false; // Stop moving animation if we hit something
         }
       } else {
         this.state.isMoving = false;
@@ -517,6 +536,8 @@ export class Character {
           this.state.position.x = newPosition.x;
           this.state.position.z = newPosition.z;
           this.state.isMoving = true;
+        } else {
+          this.state.isMoving = false; // Stop moving animation if we hit something
         }
       }
       if (keys['ArrowDown']) {
@@ -531,6 +552,8 @@ export class Character {
           this.state.position.x = newPosition.x;
           this.state.position.z = newPosition.z;
           this.state.isMoving = true;
+        } else {
+          this.state.isMoving = false; // Stop moving animation if we hit something
         }
       }
 

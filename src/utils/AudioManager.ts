@@ -8,6 +8,7 @@ class AudioManager {
   private biteSound: Howl;
   private chompSound: Howl;
   private yelpSound: Howl;
+  private barkSounds: Howl[];
   private isMuted: boolean = false;
 
   private constructor() {
@@ -55,6 +56,17 @@ class AudioManager {
       src: ['/audio/sfx/dog_yelp.mp3'],
       volume: 0.4,
     });
+
+    // Bark sounds
+    this.barkSounds = [
+      new Howl({ src: ['/audio/sfx/bark (1).mp3'], volume: 0.4 }),
+      new Howl({ src: ['/audio/sfx/bark (2).mp3'], volume: 0.4 }),
+      new Howl({ src: ['/audio/sfx/bark (3).mp3'], volume: 0.4 }),
+      new Howl({ src: ['/audio/sfx/bark (4).mp3'], volume: 0.4 }),
+      new Howl({ src: ['/audio/sfx/bark (5).mp3'], volume: 0.4 }),
+      new Howl({ src: ['/audio/sfx/bark (6).mp3'], volume: 0.4 }),
+      new Howl({ src: ['/audio/sfx/bark.mp3'], volume: 0.4 }),
+    ];
   }
 
   public static getInstance(): AudioManager {
@@ -105,6 +117,14 @@ class AudioManager {
 
   public playYelpSound() {
     this.yelpSound.play();
+  }
+
+  public playBarkSound() {
+    // Create a new array each time to avoid potential state issues
+    const availableSounds = [...this.barkSounds];
+    // Get a truly random index and remove that sound from the available ones
+    const randomIndex = Math.floor(Math.random() * availableSounds.length);
+    availableSounds[randomIndex].play();
   }
 
   public toggleMute() {
