@@ -38,11 +38,11 @@ export class Character {
   legs: THREE.Mesh[] = [];
   tail: THREE.Mesh = new THREE.Mesh();
   private players: Character[] | null = null;
-  private readonly MOVE_SPEED = 0.05;
+  private readonly MOVE_SPEED = 0.08;
   private readonly ROTATION_SPEED = 0.1;
   private readonly BITE_DURATION = 0.25;
   private readonly MIN_SIZE = 1;
-  private readonly MAX_SIZE = 3;
+  private readonly MAX_SIZE = 5;
   private readonly GROWTH_PER_BONE = 0.05;
   private readonly KNOCKBACK_DURATION = 0.5;
   private readonly BITE_LUNGE_DISTANCE = 0.5;
@@ -482,7 +482,7 @@ export class Character {
         this.state.rotation = Math.atan2(moveX, moveZ) + Math.PI;
         
         // Calculate new position
-        const moveSpeed = this.MOVE_SPEED * (1 / this.state.size);
+        const moveSpeed = this.MOVE_SPEED * (1.5 / this.state.size);
         const newPosition = new THREE.Vector3(
           this.state.position.x + moveX * moveSpeed,
           this.state.position.y,
@@ -506,7 +506,7 @@ export class Character {
         this.state.rotation -= this.ROTATION_SPEED;
       }
       if (keys['ArrowUp']) {
-        const moveSpeed = this.MOVE_SPEED * (1 / this.state.size);
+        const moveSpeed = this.MOVE_SPEED * (1.5 / this.state.size);
         const newPosition = new THREE.Vector3(
           this.state.position.x + Math.sin(this.state.rotation) * moveSpeed,
           this.state.position.y,
@@ -520,7 +520,7 @@ export class Character {
         }
       }
       if (keys['ArrowDown']) {
-        const moveSpeed = this.MOVE_SPEED * (1 / this.state.size);
+        const moveSpeed = this.MOVE_SPEED * (1.8 / this.state.size);
         const newPosition = new THREE.Vector3(
           this.state.position.x - Math.sin(this.state.rotation) * moveSpeed,
           this.state.position.y,
