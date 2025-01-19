@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Character } from './Character';
 import AudioManager from '../../utils/AudioManager';
+import dogNames from '../../data/dogNames.json';
 
 interface Bone {
   mesh: THREE.Object3D;
@@ -269,10 +270,18 @@ export class Stage {
   }
 
   createAIDogs() {
+    // Create a pool of available names
+    const availableNames = [...dogNames.names];
+    
     // Create AI dogs with more varied starting positions
     for (let i = 1; i < 10; i++) {
       const position = this.findSafeRespawnLocation();
-      const aiDog = new Character(true, i);
+      
+      // Get a random name from the available pool
+      const nameIndex = Math.floor(Math.random() * availableNames.length);
+      const name = availableNames.splice(nameIndex, 1)[0];
+      
+      const aiDog = new Character(true, i, name);
       aiDog.state.position = {
         x: position.x,
         y: position.y,
@@ -335,6 +344,8 @@ export class Stage {
 
   private updateDroppingBones(deltaTime: number) {
     const remainingBones: DroppingBone[] = [];
+    const STAGE_BOUND = 45; // Match the boundary used in Character.tsx
+    const WALL_ELASTICITY = 0.6; // How bouncy the walls are
 
     for (const bone of this.droppingBones) {
       // Update collection delay
@@ -345,10 +356,28 @@ export class Stage {
       // Apply gravity to velocity
       bone.velocity.y -= this.GRAVITY * deltaTime;
 
-      // Update position
-      bone.mesh.position.x += bone.velocity.x * deltaTime;
+      // Update position with boundary checks
+      const nextX = bone.mesh.position.x + bone.velocity.x * deltaTime;
+      const nextZ = bone.mesh.position.z + bone.velocity.z * deltaTime;
+
+      // Check X boundaries
+      if (nextX > STAGE_BOUND || nextX < -STAGE_BOUND) {
+        bone.velocity.x *= -WALL_ELASTICITY; // Reverse and dampen X velocity
+        bone.mesh.position.x = nextX > STAGE_BOUND ? STAGE_BOUND : -STAGE_BOUND;
+      } else {
+        bone.mesh.position.x = nextX;
+      }
+
+      // Check Z boundaries
+      if (nextZ > STAGE_BOUND || nextZ < -STAGE_BOUND) {
+        bone.velocity.z *= -WALL_ELASTICITY; // Reverse and dampen Z velocity
+        bone.mesh.position.z = nextZ > STAGE_BOUND ? STAGE_BOUND : -STAGE_BOUND;
+      } else {
+        bone.mesh.position.z = nextZ;
+      }
+
+      // Update Y position
       bone.mesh.position.y += bone.velocity.y * deltaTime;
-      bone.mesh.position.z += bone.velocity.z * deltaTime;
 
       // Apply rotation
       bone.mesh.rotation.x += bone.rotationSpeed.x * deltaTime;

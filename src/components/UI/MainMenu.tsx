@@ -41,7 +41,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
       alpha: true 
     });
     previewRenderer.setSize(300, 300);
-    previewRenderer.setClearColor(0x000000, 0.5); // Match UI overlay background
+    previewRenderer.setClearColor(0x90EE90, 0.5); // Light green background
     previewRef.current.appendChild(previewRenderer.domElement);
 
     // Add rounded corners to the canvas
