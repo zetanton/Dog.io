@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import AudioManager from '../../utils/AudioManager';
 import dogNames from '../../data/dogNames.json';
+import { AIController } from './AIController';
 
 interface CharacterState {
   position: {
@@ -38,43 +39,26 @@ export class Character {
   headGroup: THREE.Group = new THREE.Group();
   legs: THREE.Mesh[] = [];
   tail: THREE.Mesh = new THREE.Mesh();
-  private players: Character[] | null = null;
-  private readonly MOVE_SPEED = 0.08;
+  readonly MOVE_SPEED = 0.08;
   private readonly ROTATION_SPEED = 0.1;
-  private readonly BITE_DURATION = 0.25;
+  readonly BITE_DURATION = 0.25;
   private readonly MIN_SIZE = 1;
   private readonly MAX_SIZE = 5;
   private readonly GROWTH_PER_BONE = 0.05;
   private readonly KNOCKBACK_DURATION = 0.5;
   private readonly BITE_LUNGE_DISTANCE = 0.5;
-  private readonly AI_MOVE_SPEED_MULTIPLIER = 1.2;
+  readonly AI_MOVE_SPEED_MULTIPLIER = 1.2;
   private readonly BONES_TO_DROP = 3;
   private readonly HIT_FLASH_DURATION = 0.2;
   private readonly DEATH_ANIMATION_DURATION = 1.0;
   private readonly KNOCKBACK_SPEED = 1.0;
   private readonly TARGET_BONES = 200;
-  private readonly JUMP_FORCE = 0.2;
+  readonly JUMP_FORCE = 0.2;
   private readonly GRAVITY = 0.008;
   private readonly GROUND_LEVEL = 0.5;
-  private readonly PLATFORM_LANDING_BUFFER = 0.3; // Buffer distance for platform landing detection
-  private readonly STUCK_THRESHOLD = 0.05; // Reduced to make them less patient when stuck
-  private readonly STUCK_CHECK_INTERVAL = 60; // Frames to wait before checking if stuck
-  private readonly STUCK_MEMORY = 3; // Number of previous positions to remember
-  private readonly DIRECTION_CHANGE_DURATION = 15; // Reduced to make them change directions more frequently
-  private readonly CHASE_DISTANCE = 25; // Increased from 20 to make them chase from further away
-  private readonly FLEE_DISTANCE = 15; // Reduced from 18 to make them less likely to run away
-  private readonly BONE_DETECTION_RANGE = 60; // Increased bone detection range further
-  private readonly BONE_CHASE_SPEED_MULTIPLIER = 1.3; // Speed boost when chasing bones
-  private readonly MINIMUM_SAFE_BONES = 3; // Reduced from 5 to make them more willing to fight
-  private readonly REVENGE_DURATION = 60; // Number of frames to pursue attacker
-  private readonly REVENGE_DISTANCE = 30; // Distance to chase attacker
-  private lastPositions: THREE.Vector3[] = [];
-  private stuckCheckCounter = 0;
-  private directionChangeCounter = 0;
-  private lastDirection: THREE.Vector3 | null = null;
-  private lastAttacker: Character | null = null;
-  private revengeTimer: number = 0;
-  private readonly BARK_COOLDOWN = 2; // 2 seconds cooldown
+  private readonly PLATFORM_LANDING_BUFFER = 0.3;
+  readonly BARK_COOLDOWN = 2;
+  private aiController: AIController | null = null;
 
   static readonly DOG_COLORS = [
     new THREE.Color(0x8B4513), // Brown
@@ -93,6 +77,9 @@ export class Character {
 
   constructor(isAI: boolean, colorIndex: number, name: string = isAI ? dogNames.names[Math.floor(Math.random() * dogNames.names.length)] : 'Player') {
     this.isAI = isAI;
+    if (isAI) {
+      this.aiController = new AIController(this);
+    }
     this.state = {
       position: {
         x: (Math.random() - 0.5) * 90,
@@ -282,7 +269,7 @@ export class Character {
     );
   }
 
-  private checkCollision(newPosition: THREE.Vector3, collidables?: THREE.Object3D[], collidableBoxes?: THREE.Box3[]): boolean {
+  checkCollision(newPosition: THREE.Vector3, collidables?: THREE.Object3D[], collidableBoxes?: THREE.Box3[]): boolean {
     if (!collidables) return false;
     
     // Create a temporary bounding box at the new position
@@ -436,7 +423,6 @@ export class Character {
     collidableBoxes?: THREE.Box3[],
     allPlayers?: Character[]
   ) {
-    this.players = allPlayers || null;
     this.state.animationTime += deltaTime;
 
     // Update bark cooldown
@@ -466,7 +452,7 @@ export class Character {
     }
 
     if (this.isAI) {
-      this.handleAI(deltaTime, collidables, collidableBoxes);
+      this.aiController?.update(deltaTime, collidables, collidableBoxes, allPlayers);
     } else {
       // Handle keyboard input for player character
       const moveDirection = new THREE.Vector3();
@@ -676,12 +662,6 @@ export class Character {
   }
 
   applyKnockback(attacker: Character, multiplier: number = 1.0) {
-    // Store attacker for revenge
-    if (this.isAI) {
-        this.lastAttacker = attacker;
-        this.revengeTimer = this.REVENGE_DURATION;
-    }
-
     // Calculate knockback direction away from attacker
     const knockbackDir = new THREE.Vector3(
         this.state.position.x - attacker.state.position.x,
@@ -696,6 +676,11 @@ export class Character {
     // Reset hit state and timer
     this.state.isHit = true;
     this.state.hitTimer = this.HIT_FLASH_DURATION;
+
+    // Store attacker for revenge if AI
+    if (this.isAI && this.aiController) {
+      this.aiController.setLastAttacker(attacker);
+    }
   }
 
   collectBone() {
@@ -774,332 +759,6 @@ export class Character {
     
     console.log(`[dropSomeBones] ===== END =====`);
     return actualBonesToDrop;
-  }
-
-  private isStuck(): boolean {
-    if (this.lastPositions.length < this.STUCK_MEMORY) return false;
-    
-    // Calculate total movement distance over the last few positions
-    let totalMovement = 0;
-    for (let i = 1; i < this.lastPositions.length; i++) {
-      totalMovement += this.lastPositions[i].distanceTo(this.lastPositions[i - 1]);
-    }
-    
-    return totalMovement < this.STUCK_THRESHOLD;
-  }
-
-  private findAlternativeDirection(currentDirection: THREE.Vector3, collidables?: THREE.Object3D[]): THREE.Vector3 {
-    const angles = [Math.PI/4, -Math.PI/4, Math.PI/2, -Math.PI/2, Math.PI*3/4, -Math.PI*3/4];
-    let bestDirection = currentDirection.clone();
-    let maxClearDistance = 0;
-
-    for (const angle of angles) {
-      // Rotate the current direction by the test angle
-      const testDirection = currentDirection.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-      const raycaster = new THREE.Raycaster(
-        new THREE.Vector3(this.state.position.x, this.state.position.y, this.state.position.z),
-        testDirection,
-        0,
-        5
-      );
-
-      // Check for obstacles in this direction
-      const intersects = collidables ? raycaster.intersectObjects(collidables) : [];
-      const clearDistance = intersects.length > 0 ? intersects[0].distance : 5;
-
-      if (clearDistance > maxClearDistance) {
-        maxClearDistance = clearDistance;
-        bestDirection = testDirection;
-      }
-    }
-
-    return bestDirection;
-  }
-
-  private handleAI(deltaTime: number, collidables?: THREE.Object3D[], collidableBoxes?: THREE.Box3[]) {
-    if (!this.isAI) return;
-
-    // Update revenge timer
-    if (this.revengeTimer > 0) {
-        this.revengeTimer--;
-        if (this.revengeTimer <= 0) {
-            this.lastAttacker = null;
-        }
-    }
-
-    // Update position history for stuck detection
-    this.stuckCheckCounter++;
-    if (this.stuckCheckCounter >= this.STUCK_CHECK_INTERVAL) {
-        this.lastPositions.push(new THREE.Vector3(this.state.position.x, this.state.position.y, this.state.position.z));
-        if (this.lastPositions.length > this.STUCK_MEMORY) {
-            this.lastPositions.shift();
-        }
-        this.stuckCheckCounter = 0;
-    }
-
-    // Find nearest bone and player
-    let nearestBone: { position: THREE.Vector3, distance: number } | null = null;
-    let nearestPlayer: { character: Character, distance: number } | null = null;
-    let weakestPlayer: { character: Character, distance: number } | null = null;
-    let revengeTarget: { character: Character, distance: number } | null = null;
-    let nearbyBones: { position: THREE.Vector3, distance: number }[] = [];
-    
-    // Get all bones and players from the scene
-    const bones = collidables?.filter(obj => 
-        obj instanceof THREE.Object3D && 
-        obj.name === 'bone' && 
-        obj.visible && 
-        obj.parent
-    ) || [];
-
-    const players = collidables?.filter(obj => 
-        obj instanceof THREE.Group && 
-        obj !== this.dog && 
-        obj.parent
-    ).map(obj => {
-        const char = this.players?.find(p => p.dog === obj);
-        return char ? { obj, character: char } : null;
-    }).filter(x => x !== null) || [];
-
-    // Find and track all nearby bones
-    for (const bone of bones) {
-        const distance = new THREE.Vector3(
-            bone.position.x - this.state.position.x,
-            0,
-            bone.position.z - this.state.position.z
-        ).length();
-
-        if (distance < this.BONE_DETECTION_RANGE) {
-            const boneInfo = {
-                position: bone.position,
-                distance: distance
-            };
-            nearbyBones.push(boneInfo);
-            
-            if (!nearestBone || distance < nearestBone.distance) {
-                nearestBone = boneInfo;
-            }
-        }
-    }
-
-    // Find nearest and weakest players, and check for revenge target
-    for (const player of players) {
-        if (!player) continue;
-        const distance = new THREE.Vector3(
-            player.obj.position.x - this.state.position.x,
-            0,
-            player.obj.position.z - this.state.position.z
-        ).length();
-
-        // Update nearest player
-        if (!nearestPlayer || distance < nearestPlayer.distance) {
-            nearestPlayer = {
-                character: player.character,
-                distance: distance
-            };
-        }
-
-        // Check for revenge target
-        if (this.lastAttacker === player.character && distance < this.REVENGE_DISTANCE) {
-            revengeTarget = {
-                character: player.character,
-                distance: distance
-            };
-        }
-
-        // Track weak players more aggressively
-        if (this.state.bones >= this.MINIMUM_SAFE_BONES && 
-            distance < this.CHASE_DISTANCE && 
-            (player.character.state.bones <= this.state.bones * 1.2) && // More willing to attack similar-sized dogs
-            (!weakestPlayer || player.character.state.bones < weakestPlayer.character.state.bones)) {
-            weakestPlayer = {
-                character: player.character,
-                distance: distance
-            };
-        }
-    }
-
-    // Decision making based on state
-    let targetPosition: THREE.Vector3 | null = null;
-    let shouldBite = false;
-    let isPursuing = false;
-    let isHuntingBones = false;
-
-    // Prioritize revenge if we have an attacker
-    if (revengeTarget) {
-        targetPosition = revengeTarget.character.dog.position;
-        shouldBite = revengeTarget.distance < 4; // More aggressive bite range when pursuing revenge
-        isPursuing = true;
-    }
-    // Run from players with significantly more bones
-    else if (nearestPlayer && 
-        nearestPlayer.distance < this.FLEE_DISTANCE && 
-        this.state.bones < (nearestPlayer.character.state.bones * 0.7)) { // More willing to stand ground
-        // Find escape route considering bone positions
-        const awayVector = new THREE.Vector3(
-            this.state.position.x - nearestPlayer.character.dog.position.x,
-            0,
-            this.state.position.z - nearestPlayer.character.dog.position.z
-        ).normalize();
-
-        // Try to flee towards bones if possible
-        let bestFleeTarget = null;
-        let bestFleeScore = -1;
-        for (const bone of nearbyBones) {
-            const toBone = new THREE.Vector3(
-                bone.position.x - this.state.position.x,
-                0,
-                bone.position.z - this.state.position.z
-            ).normalize();
-            
-            // Score based on alignment with escape direction and distance
-            const alignmentScore = awayVector.dot(toBone) + 1; // 0 to 2
-            const distanceScore = 1 - (bone.distance / this.BONE_DETECTION_RANGE); // 0 to 1
-            const score = alignmentScore * distanceScore;
-            
-            if (score > bestFleeScore) {
-                bestFleeScore = score;
-                bestFleeTarget = bone.position;
-            }
-        }
-
-        // If we found a good bone to flee towards, use that, otherwise just flee
-        if (bestFleeTarget && bestFleeScore > 0.5) {
-            targetPosition = bestFleeTarget;
-            isHuntingBones = true;
-        } else {
-            targetPosition = new THREE.Vector3(
-                this.state.position.x + awayVector.x * 15,
-                this.state.position.y,
-                this.state.position.z + awayVector.z * 15
-            );
-        }
-    }
-    // Attack weak players
-    else if (weakestPlayer) {
-        targetPosition = weakestPlayer.character.dog.position;
-        shouldBite = weakestPlayer.distance < 3.5; // Increased bite range
-        isPursuing = true;
-    }
-    // Go for nearest bone if no better targets
-    else if (nearestBone) {
-        targetPosition = nearestBone.position;
-        isHuntingBones = true;
-    }
-
-    // If we have a target, move towards it while avoiding obstacles
-    if (targetPosition) {
-        // Calculate direction to target
-        const direction = new THREE.Vector3(
-            targetPosition.x - this.state.position.x,
-            0,
-            targetPosition.z - this.state.position.z
-        ).normalize();
-
-        // Check if we're stuck
-        const isCurrentlyStuck = this.isStuck();
-
-        // If we're stuck or still in direction change mode, use alternative direction
-        if (isCurrentlyStuck || this.directionChangeCounter > 0) {
-            if (isCurrentlyStuck && this.directionChangeCounter <= 0) {
-                // Start a new direction change
-                this.lastDirection = this.findAlternativeDirection(direction, collidables);
-                this.directionChangeCounter = this.DIRECTION_CHANGE_DURATION;
-                
-                // More aggressive jumping when stuck
-                if (!this.state.isJumping && Math.random() < 0.8) {
-                    this.state.isJumping = true;
-                    this.state.jumpVelocity = this.JUMP_FORCE * 1.2;
-                }
-            }
-            
-            if (this.lastDirection) {
-                // Blend between alternative direction and target direction
-                const blendFactor = isHuntingBones ? 0.3 : (isPursuing ? 0.4 : 0.6);
-                direction.lerp(this.lastDirection, blendFactor);
-                direction.normalize();
-            }
-            
-            this.directionChangeCounter = Math.max(0, this.directionChangeCounter - 1);
-        }
-
-        // Set rotation to face target
-        this.state.rotation = Math.atan2(-direction.x, -direction.z);
-
-        // Cast rays for obstacle detection
-        const raycaster = new THREE.Raycaster(
-            new THREE.Vector3(this.state.position.x, this.state.position.y, this.state.position.z),
-            direction,
-            0,
-            3
-        );
-        const obstacles = collidables ? raycaster.intersectObjects(collidables) : [];
-
-        // Move in that direction with appropriate speed boost
-        let moveSpeed = this.MOVE_SPEED * this.AI_MOVE_SPEED_MULTIPLIER * (1 / this.state.size) * deltaTime * 60;
-        if (isHuntingBones) {
-            moveSpeed *= this.BONE_CHASE_SPEED_MULTIPLIER;
-        } else if (isPursuing) {
-            moveSpeed *= 1.3; // Increased pursuit speed
-        }
-
-        const newPosition = new THREE.Vector3(
-            this.state.position.x + direction.x * moveSpeed,
-            this.state.position.y,
-            this.state.position.z + direction.z * moveSpeed
-        );
-
-        // Check for platform edges and obstacles ahead
-        const { collision: hasGroundAhead } = this.checkGroundAndPlatformCollision(newPosition, collidables);
-        const shouldJump = (!hasGroundAhead || obstacles.length > 0) && !this.state.isJumping;
-
-        // Enhanced jumping logic
-        if (shouldJump) {
-            // Higher chance to jump when pursuing or hunting
-            const jumpChance = isPursuing ? 0.6 : (isHuntingBones ? 0.5 : (obstacles.length > 0 ? 0.4 : 0.2));
-            if (Math.random() < jumpChance) {
-                this.state.isJumping = true;
-                this.state.jumpVelocity = this.JUMP_FORCE * (isPursuing ? 1.2 : 1.0);
-            }
-        }
-
-        // Random combat jumps when close to target
-        if (isPursuing && !this.state.isJumping && Math.random() < 0.03) {
-            this.state.isJumping = true;
-            this.state.jumpVelocity = this.JUMP_FORCE * 1.1;
-        }
-
-        // Move if no collision
-        if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
-            this.state.position.x = newPosition.x;
-            this.state.position.z = newPosition.z;
-            this.state.isMoving = true;
-        }
-    } else {
-        // More active random movement when no target
-        if (Math.random() < 0.04 * deltaTime * 60) {
-            this.state.rotation += (Math.random() - 0.5) * Math.PI * deltaTime;
-            // Sometimes jump during random movement
-            if (!this.state.isJumping && Math.random() < 0.15) {
-                this.state.isJumping = true;
-                this.state.jumpVelocity = this.JUMP_FORCE;
-            }
-        }
-    }
-
-    // More aggressive bite logic
-    if (shouldBite && !this.state.isBiting && this.state.knockbackTime <= 0) {
-        const biteChance = isPursuing ? 0.95 : 0.8; // Very high chance to bite when pursuing
-        if (Math.random() < biteChance) {
-            this.state.isBiting = true;
-            this.state.biteTimer = this.BITE_DURATION;
-        }
-    }
-
-    // Keep within bounds
-    const BOUND = 45;
-    this.state.position.x = Math.max(-BOUND, Math.min(BOUND, this.state.position.x));
-    this.state.position.z = Math.max(-BOUND, Math.min(BOUND, this.state.position.z));
   }
 
   respawn() {
