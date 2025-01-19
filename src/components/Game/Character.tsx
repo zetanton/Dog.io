@@ -624,38 +624,47 @@ export class Character {
   }
 
   bite(): THREE.Box3 {
-    // Create a bite hitbox that covers the entire bite animation area
+    // Create a bite hitbox that only extends in front of the dog
     const biteBox = new THREE.Box3();
-    const biteOffset = (1 + this.BITE_LUNGE_DISTANCE) * this.state.size; // Scale bite range with dog size
-    const biteSize = this.state.size * 1.5; // Increased from 1.2 to 1.5 for more generous detection
+    const biteOffset = (1 + this.BITE_LUNGE_DISTANCE) * this.state.size;
+    const biteWidth = this.state.size * 0.8;
+    const biteHeight = this.state.size * 1.2;
     
     // Calculate bite position in front of the dog
-    // Add some vertical offset to account for head position
-    const headHeight = this.state.size * 0.7; // Approximate head height
+    const headHeight = this.state.size * 0.7;
     const dogPosition = new THREE.Vector3(
       this.state.position.x,
       this.state.position.y + headHeight,
       this.state.position.z
     );
     
-    // Calculate the bite target position
-    const bitePosition = new THREE.Vector3(
-      this.state.position.x + Math.sin(this.state.rotation) * biteOffset,
+    // Calculate forward direction vector based on rotation (flipped signs to match correct direction)
+    const forwardX = -Math.sin(this.state.rotation);
+    const forwardZ = -Math.cos(this.state.rotation);
+    
+    // Calculate right vector (perpendicular to forward)
+    const rightX = -forwardZ;
+    const rightZ = forwardX;
+    
+    // Calculate corners of the bite area
+    const frontCenter = new THREE.Vector3(
+      this.state.position.x + forwardX * biteOffset,
       this.state.position.y + headHeight,
-      this.state.position.z + Math.cos(this.state.rotation) * biteOffset
+      this.state.position.z + forwardZ * biteOffset
     );
     
-    // Create a larger hitbox that covers the entire bite arc
-    const minX = Math.min(dogPosition.x, bitePosition.x) - biteSize;
-    const maxX = Math.max(dogPosition.x, bitePosition.x) + biteSize;
-    const minY = this.state.position.y; // Start from ground level
-    const maxY = dogPosition.y + biteSize; // Cover above the head
-    const minZ = Math.min(dogPosition.z, bitePosition.z) - biteSize;
-    const maxZ = Math.max(dogPosition.z, bitePosition.z) + biteSize;
-    
+    // Set box bounds to create a rectangular area in front of the dog
     biteBox.set(
-      new THREE.Vector3(minX, minY, minZ),
-      new THREE.Vector3(maxX, maxY, maxZ)
+      new THREE.Vector3(
+        Math.min(dogPosition.x, frontCenter.x - rightX * biteWidth),
+        this.state.position.y,
+        Math.min(dogPosition.z, frontCenter.z - rightZ * biteWidth)
+      ),
+      new THREE.Vector3(
+        Math.max(dogPosition.x, frontCenter.x + rightX * biteWidth),
+        this.state.position.y + biteHeight,
+        Math.max(dogPosition.z, frontCenter.z + rightZ * biteWidth)
+      )
     );
     
     return biteBox;

@@ -25,6 +25,10 @@ export class AIController {
     private readonly DEFENSIVE_JUMP_CHANCE = 0.1;
     private readonly STUCK_JUMP_CHANCE = 0.3;
     private readonly MINIMUM_JUMP_INTERVAL = 120;
+    private readonly LEADER_ATTACK_DISTANCE = 45;
+    private readonly BEHIND_ATTACK_BONUS = 0.4;
+    private readonly PACK_ATTACK_RANGE = 25;
+    private readonly SNEAK_SPEED_MULTIPLIER = 0.8;
 
     private character: Character;
     private lastPositions: THREE.Vector3[] = [];
@@ -211,6 +215,7 @@ export class AIController {
         let nearestPlayer: { character: Character, distance: number } | null = null;
         let weakestPlayer: { character: Character, distance: number } | null = null;
         let revengeTarget: { character: Character, distance: number } | null = null;
+        let leaderTarget: { character: Character, distance: number, isVulnerable: boolean } | null = null;
         let nearbyBones: { position: THREE.Vector3, distance: number }[] = [];
 
         // Get all bones and players from the scene
@@ -222,6 +227,11 @@ export class AIController {
         ) || [];
 
         const players = allPlayers?.filter(p => p !== this.character) || [];
+
+        // Find the current leader
+        let currentLeader = players.reduce((leader, player) => {
+            return (!leader || player.state.bones > leader.state.bones) ? player : leader;
+        }, players[0]);
 
         // Find and track all nearby bones
         for (const bone of bones) {
@@ -266,6 +276,42 @@ export class AIController {
                 };
             }
 
+            // Check if this is the leader and evaluate for attack
+            if (player === currentLeader && distance < this.LEADER_ATTACK_DISTANCE) {
+                // Calculate if we're behind the leader
+                const leaderForward = new THREE.Vector3(
+                    Math.sin(player.state.rotation),
+                    0,
+                    Math.cos(player.state.rotation)
+                );
+                const toUs = new THREE.Vector3(
+                    this.character.state.position.x - player.state.position.x,
+                    0,
+                    this.character.state.position.z - player.state.position.z
+                ).normalize();
+                const isBehind = leaderForward.dot(toUs) < -0.5;
+
+                // Check if other dogs are also attacking the leader
+                const packAttacking = players.some(otherDog => {
+                    if (otherDog === this.character || otherDog === player) return false;
+                    const dogToLeader = new THREE.Vector3(
+                        player.state.position.x - otherDog.state.position.x,
+                        0,
+                        player.state.position.z - otherDog.state.position.z
+                    ).length();
+                    return dogToLeader < this.PACK_ATTACK_RANGE && otherDog.state.isBiting;
+                });
+
+                // Calculate attack probability bonus based on position
+                const attackBonus = isBehind ? this.BEHIND_ATTACK_BONUS : 0;
+
+                leaderTarget = {
+                    character: player,
+                    distance: distance * (1 - attackBonus), // Effectively reduces the perceived distance when behind
+                    isVulnerable: isBehind || packAttacking || player.state.isJumping
+                };
+            }
+
             if (this.character.state.bones >= this.MINIMUM_SAFE_BONES && 
                 distance < this.CHASE_DISTANCE && 
                 (player.state.bones <= this.character.state.bones * 1.2) &&
@@ -282,6 +328,7 @@ export class AIController {
         let shouldBite = false;
         let isPursuing = false;
         let isHuntingBones = false;
+        let isSneaking = false;
 
         // Enhanced decision tree for behavior
         if (revengeTarget && this.character.state.bones >= this.MINIMUM_SAFE_BONES) {
@@ -292,6 +339,21 @@ export class AIController {
             );
             shouldBite = revengeTarget.distance < 4;
             isPursuing = true;
+        }
+        // New leader targeting logic
+        else if (leaderTarget && 
+                 ((this.character.state.bones >= this.MINIMUM_SAFE_BONES && leaderTarget.isVulnerable) || 
+                  leaderTarget.character.state.bones > this.character.state.bones * 2)) {
+            targetPosition = new THREE.Vector3(
+                leaderTarget.character.state.position.x,
+                leaderTarget.character.state.position.y,
+                leaderTarget.character.state.position.z
+            );
+            // Adjust bite range based on position advantage
+            const effectiveDistance = leaderTarget.distance;
+            shouldBite = effectiveDistance < (leaderTarget.isVulnerable ? 4 : 3);
+            isPursuing = true;
+            isSneaking = !leaderTarget.isVulnerable;
         }
         else if (nearestPlayer && 
             nearestPlayer.distance < this.FLEE_DISTANCE && 
@@ -357,7 +419,7 @@ export class AIController {
             }
         }
 
-        this.moveTowardsTarget(targetPosition, isPursuing, isHuntingBones, shouldBite, deltaTime, collidables, collidableBoxes);
+        this.moveTowardsTarget(targetPosition, isPursuing, isHuntingBones, shouldBite, deltaTime, collidables, collidableBoxes, isSneaking);
 
         // Random barking with different probabilities based on state
         if (this.character.state.barkCooldown <= 0) {
@@ -504,7 +566,8 @@ export class AIController {
         shouldBite: boolean,
         deltaTime: number,
         collidables?: THREE.Object3D[],
-        collidableBoxes?: THREE.Box3[]
+        collidableBoxes?: THREE.Box3[],
+        isSneaking: boolean = false
     ) {
         // Update cooldowns
         if (this.platformJumpCooldown > 0) {
@@ -656,7 +719,7 @@ export class AIController {
             if (isHuntingBones) {
                 moveSpeed *= this.BONE_CHASE_SPEED_MULTIPLIER;
             } else if (isPursuing) {
-                moveSpeed *= 1.3;
+                moveSpeed *= isSneaking ? this.SNEAK_SPEED_MULTIPLIER : 1.3;
             }
 
             const newPosition = new THREE.Vector3(
