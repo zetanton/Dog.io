@@ -3,10 +3,10 @@ import Character from './Character';
 import AudioManager from '../../utils/AudioManager';
 
 export class AIController {
-    private readonly STUCK_THRESHOLD = 0.05;
-    private readonly STUCK_CHECK_INTERVAL = 60;
-    private readonly STUCK_MEMORY = 3;
-    private readonly DIRECTION_CHANGE_DURATION = 15;
+    private readonly STUCK_THRESHOLD = 0.1;
+    private readonly STUCK_CHECK_INTERVAL = 30;
+    private readonly STUCK_MEMORY = 4;
+    private readonly DIRECTION_CHANGE_DURATION = 20;
     private readonly CHASE_DISTANCE = 25;
     private readonly FLEE_DISTANCE = 15;
     private readonly BONE_DETECTION_RANGE = 60;
@@ -31,36 +31,89 @@ export class AIController {
         if (this.lastPositions.length < this.STUCK_MEMORY) return false;
         
         let totalMovement = 0;
+        let isOscillating = true;
+        
+        // Check total movement
         for (let i = 1; i < this.lastPositions.length; i++) {
-            totalMovement += this.lastPositions[i].distanceTo(this.lastPositions[i - 1]);
+            const movement = this.lastPositions[i].distanceTo(this.lastPositions[i - 1]);
+            totalMovement += movement;
+            
+            // Check if movement is consistently in different directions (oscillating)
+            if (i > 1) {
+                const prevDiff = this.lastPositions[i-1].clone().sub(this.lastPositions[i-2]);
+                const currentDiff = this.lastPositions[i].clone().sub(this.lastPositions[i-1]);
+                const dotProduct = prevDiff.dot(currentDiff);
+                if (dotProduct > 0) {
+                    isOscillating = false;
+                }
+            }
         }
         
-        return totalMovement < this.STUCK_THRESHOLD;
+        // Check if we're moving in a very small area
+        const boundingBox = new THREE.Box3();
+        this.lastPositions.forEach(pos => boundingBox.expandByPoint(pos));
+        const boxSize = new THREE.Vector3();
+        boundingBox.getSize(boxSize);
+        const areaSize = boxSize.x * boxSize.z;
+        
+        return totalMovement < this.STUCK_THRESHOLD || 
+               (isOscillating && areaSize < this.STUCK_THRESHOLD * 2) ||
+               areaSize < this.STUCK_THRESHOLD;
     }
 
     private findAlternativeDirection(currentDirection: THREE.Vector3, collidables?: THREE.Object3D[]): THREE.Vector3 {
-        const angles = [Math.PI/4, -Math.PI/4, Math.PI/2, -Math.PI/2, Math.PI*3/4, -Math.PI*3/4];
+        const angles = [
+            Math.PI/6, -Math.PI/6,    // Small adjustments
+            Math.PI/4, -Math.PI/4,    // Medium turns
+            Math.PI/2, -Math.PI/2,    // Right angles
+            Math.PI*2/3, -Math.PI*2/3,// Wide turns
+            Math.PI, -Math.PI         // Complete reversal if needed
+        ];
+        
         let bestDirection = currentDirection.clone();
         let maxClearDistance = 0;
+        const position = new THREE.Vector3(
+            this.character.state.position.x,
+            this.character.state.position.y,
+            this.character.state.position.z
+        );
 
+        // Cast rays in multiple directions and heights
+        const heights = [-0.5, 0, 0.5];  // Check below, at, and above current height
+        
         for (const angle of angles) {
+            let totalClearDistance = 0;
+            let rayCount = 0;
+            
             const testDirection = currentDirection.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
-            const raycaster = new THREE.Raycaster(
-                new THREE.Vector3(
-                    this.character.state.position.x,
-                    this.character.state.position.y,
-                    this.character.state.position.z
-                ),
-                testDirection,
-                0,
-                5
-            );
-
-            const intersects = collidables ? raycaster.intersectObjects(collidables) : [];
-            const clearDistance = intersects.length > 0 ? intersects[0].distance : 5;
-
-            if (clearDistance > maxClearDistance) {
-                maxClearDistance = clearDistance;
+            
+            for (const height of heights) {
+                const rayStart = position.clone();
+                rayStart.y += height;
+                
+                // Cast three parallel rays (left, center, right) for each height
+                const offsets = [-0.5, 0, 0.5];
+                for (const offset of offsets) {
+                    const offsetVec = new THREE.Vector3(-testDirection.z, 0, testDirection.x).multiplyScalar(offset);
+                    const rayOrigin = rayStart.clone().add(offsetVec);
+                    
+                    const raycaster = new THREE.Raycaster(rayOrigin, testDirection, 0, 8);
+                    const intersects = collidables ? raycaster.intersectObjects(collidables) : [];
+                    
+                    const clearDistance = intersects.length > 0 ? intersects[0].distance : 8;
+                    totalClearDistance += clearDistance;
+                    rayCount++;
+                }
+            }
+            
+            const averageClearDistance = totalClearDistance / rayCount;
+            
+            // Prefer directions closer to current direction
+            const directionPreference = 1 - Math.abs(angle) / Math.PI;
+            const weightedDistance = averageClearDistance * (0.7 + 0.3 * directionPreference);
+            
+            if (weightedDistance > maxClearDistance) {
+                maxClearDistance = weightedDistance;
                 bestDirection = testDirection;
             }
         }
@@ -273,19 +326,58 @@ export class AIController {
 
             const isCurrentlyStuck = this.isStuck();
 
-            if (isCurrentlyStuck || this.directionChangeCounter > 0) {
-                if (isCurrentlyStuck && this.directionChangeCounter <= 0) {
+            // Enhanced obstacle detection using multiple raycasters
+            const mainRaycaster = new THREE.Raycaster(
+                new THREE.Vector3(
+                    this.character.state.position.x,
+                    this.character.state.position.y,
+                    this.character.state.position.z
+                ),
+                direction,
+                0,
+                4
+            );
+            
+            // Cast additional rays at angles to detect obstacles early
+            const sideRays = [
+                direction.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI/6),
+                direction.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI/6)
+            ];
+            
+            const allRays = [direction, ...sideRays];
+            let closestObstacle = Infinity;
+            
+            for (const ray of allRays) {
+                mainRaycaster.set(
+                    new THREE.Vector3(
+                        this.character.state.position.x,
+                        this.character.state.position.y,
+                        this.character.state.position.z
+                    ),
+                    ray
+                );
+                const intersects = collidables ? mainRaycaster.intersectObjects(collidables) : [];
+                if (intersects.length > 0 && intersects[0].distance < closestObstacle) {
+                    closestObstacle = intersects[0].distance;
+                }
+            }
+
+            if (isCurrentlyStuck || this.directionChangeCounter > 0 || closestObstacle < 2.5) {
+                if ((isCurrentlyStuck || closestObstacle < 2.5) && this.directionChangeCounter <= 0) {
                     this.lastDirection = this.findAlternativeDirection(direction, collidables);
                     this.directionChangeCounter = this.DIRECTION_CHANGE_DURATION;
                     
-                    if (!this.character.state.isJumping && Math.random() < 0.8) {
+                    // More aggressive jumping when stuck
+                    if (!this.character.state.isJumping && Math.random() < 0.9) {
                         this.character.state.isJumping = true;
-                        this.character.state.jumpVelocity = this.character.JUMP_FORCE * 1.2;
+                        this.character.state.jumpVelocity = this.character.JUMP_FORCE * 
+                            (isCurrentlyStuck ? 1.4 : 1.2);
                     }
                 }
                 
                 if (this.lastDirection) {
-                    const blendFactor = isHuntingBones ? 0.3 : (isPursuing ? 0.4 : 0.6);
+                    const blendFactor = isCurrentlyStuck ? 0.8 : 
+                                      (closestObstacle < 2.5 ? 0.6 : 0.4);
                     direction.lerp(this.lastDirection, blendFactor);
                     direction.normalize();
                 }
