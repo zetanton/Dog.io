@@ -263,6 +263,13 @@ export class Stage {
 
   createPlayer(name: string, colorIndex: number): Character {
     const player = new Character(false, colorIndex, name);
+    const safePosition = this.findSafeRespawnLocation();
+    player.state.position = {
+        x: safePosition.x,
+        y: safePosition.y,
+        z: safePosition.z
+    };
+    player.updateDogPosition();
     this.players.push(player);
     this.scene.add(player.dog);
     this.createNameTag(player);
@@ -275,22 +282,21 @@ export class Stage {
     
     // Create AI dogs with more varied starting positions
     for (let i = 1; i < 10; i++) {
-      const position = this.findSafeRespawnLocation();
-      
-      // Get a random name from the available pool
-      const nameIndex = Math.floor(Math.random() * availableNames.length);
-      const name = availableNames.splice(nameIndex, 1)[0];
-      
-      const aiDog = new Character(true, i, name);
-      aiDog.state.position = {
-        x: position.x,
-        y: position.y,
-        z: position.z
-      };
-      aiDog.updateDogPosition();
-      this.players.push(aiDog);
-      this.scene.add(aiDog.dog);
-      this.createNameTag(aiDog);
+        // Get a random name from the available pool
+        const nameIndex = Math.floor(Math.random() * availableNames.length);
+        const name = availableNames.splice(nameIndex, 1)[0];
+        
+        const aiDog = new Character(true, i, name);
+        const safePosition = this.findSafeRespawnLocation();
+        aiDog.state.position = {
+            x: safePosition.x,
+            y: safePosition.y,
+            z: safePosition.z
+        };
+        aiDog.updateDogPosition();
+        this.players.push(aiDog);
+        this.scene.add(aiDog.dog);
+        this.createNameTag(aiDog);
     }
   }
 
@@ -414,50 +420,117 @@ export class Stage {
   }
 
   private findSafeRespawnLocation(): THREE.Vector3 {
-    const margin = 5; // Minimum distance from other objects
-    const maxAttempts = 50;
+    const margin = 7; // Increased minimum distance from other objects
+    const maxAttempts = 100; // Increased max attempts
+    const gridSize = 10; // Number of grid sections to try
     
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      // Generate random position within bounds
-      const position = new THREE.Vector3(
-        (Math.random() - 0.5) * (this.STAGE_SIZE - 20),
-        0.5,
-        (Math.random() - 0.5) * (this.STAGE_SIZE - 20)
-      );
+    // Try random positions first
+    for (let attempt = 0; attempt < maxAttempts / 2; attempt++) {
+        // Generate random position within bounds, avoiding the very edges
+        const position = new THREE.Vector3(
+            (Math.random() - 0.5) * (this.STAGE_SIZE - 30),
+            0.5,
+            (Math.random() - 0.5) * (this.STAGE_SIZE - 30)
+        );
 
-      // Check distance from all collidable objects
-      let isSafe = true;
-      for (const object of this.collidableObjects) {
+        if (this.isPositionSafe(position, margin)) {
+            return position;
+        }
+    }
+
+    // If random attempts fail, try grid-based approach
+    const sectionSize = (this.STAGE_SIZE - 30) / gridSize;
+    for (let x = 0; x < gridSize; x++) {
+        for (let z = 0; z < gridSize; z++) {
+            const position = new THREE.Vector3(
+                (-this.STAGE_SIZE / 2 + 15 + x * sectionSize + Math.random() * sectionSize),
+                0.5,
+                (-this.STAGE_SIZE / 2 + 15 + z * sectionSize + Math.random() * sectionSize)
+            );
+
+            if (this.isPositionSafe(position, margin)) {
+                return position;
+            }
+        }
+    }
+
+    // If all else fails, find the position furthest from all objects
+    let bestPosition = new THREE.Vector3(0, 0.5, 0);
+    let maxMinDistance = 0;
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+        const position = new THREE.Vector3(
+            (Math.random() - 0.5) * (this.STAGE_SIZE - 30),
+            0.5,
+            (Math.random() - 0.5) * (this.STAGE_SIZE - 30)
+        );
+
+        let minDistance = Infinity;
+        
+        // Check distance from collidable objects
+        for (const object of this.collidableObjects) {
+            const objectBox = new THREE.Box3().setFromObject(object);
+            const objectCenter = new THREE.Vector3();
+            objectBox.getCenter(objectCenter);
+            const distance = position.distanceTo(objectCenter);
+            minDistance = Math.min(minDistance, distance);
+        }
+
+        // Check distance from other players
+        for (const player of this.players) {
+            if (!player.state.isDying) {
+                const playerPos = new THREE.Vector3(
+                    player.state.position.x,
+                    player.state.position.y,
+                    player.state.position.z
+                );
+                const distance = position.distanceTo(playerPos);
+                minDistance = Math.min(minDistance, distance);
+            }
+        }
+
+        if (minDistance > maxMinDistance) {
+            maxMinDistance = minDistance;
+            bestPosition = position;
+        }
+    }
+
+    return bestPosition;
+  }
+
+  private isPositionSafe(position: THREE.Vector3, margin: number): boolean {
+    // Check distance from all collidable objects
+    for (const object of this.collidableObjects) {
         const objectBox = new THREE.Box3().setFromObject(object);
         const objectCenter = new THREE.Vector3();
         objectBox.getCenter(objectCenter);
         
         if (position.distanceTo(objectCenter) < margin) {
-          isSafe = false;
-          break;
+            return false;
         }
-      }
-
-      // Check distance from other players
-      for (const player of this.players) {
-        if (!player.state.isDying && 
-            position.distanceTo(new THREE.Vector3(
-            player.state.position.x,
-            player.state.position.y,
-            player.state.position.z
-            )) < margin) {
-          isSafe = false;
-          break;
-        }
-      }
-
-      if (isSafe) {
-        return position;
-      }
     }
 
-    // If no safe spot found, return a fallback position
-    return new THREE.Vector3(0, 0.5, 0);
+    // Check distance from other players
+    for (const player of this.players) {
+        if (!player.state.isDying) {
+            const playerPos = new THREE.Vector3(
+                player.state.position.x,
+                player.state.position.y,
+                player.state.position.z
+            );
+            if (position.distanceTo(playerPos) < margin) {
+                return false;
+            }
+        }
+    }
+
+    // Check if position is within stage bounds
+    if (Math.abs(position.x) > this.STAGE_SIZE / 2 - 10 || 
+        Math.abs(position.z) > this.STAGE_SIZE / 2 - 10) {
+        return false;
+    }
+
+    return true;
   }
 
   private cleanupObject(object: THREE.Object3D) {

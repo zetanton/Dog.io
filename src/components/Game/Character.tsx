@@ -82,9 +82,9 @@ export class Character {
     }
     this.state = {
       position: {
-        x: (Math.random() - 0.5) * 90,
+        x: 0,
         y: 0.5,
-        z: (Math.random() - 0.5) * 90
+        z: 0
       },
       rotation: Math.random() * Math.PI * 2,
       size: this.MIN_SIZE,
@@ -762,12 +762,7 @@ export class Character {
   }
 
   respawn() {
-    // Reset position to a random location
-    this.state.position = {
-      x: (Math.random() - 0.5) * 90,
-      y: 0.5,
-      z: (Math.random() - 0.5) * 90
-    };
+    // Reset state but don't set position (Stage will handle this)
     this.state.rotation = Math.random() * Math.PI * 2;
     this.state.size = this.MIN_SIZE;
     this.state.bones = 0;
