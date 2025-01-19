@@ -231,20 +231,98 @@ export class Stage {
     knob2.position.z = -0.25;
     boneGroup.add(knob2);
 
-    // Random position within stage bounds
-    const position = new THREE.Vector3(
-      (Math.random() - 0.5) * (this.STAGE_SIZE - 10),
-      0.5,
-      (Math.random() - 0.5) * (this.STAGE_SIZE - 10)
-    );
-    
-    boneGroup.position.copy(position);
-    boneGroup.rotation.y = Math.random() * Math.PI * 2; // Random initial rotation
-    
     // Add shadows
     boneGroup.children.forEach(part => {
       part.castShadow = true;
     });
+
+    // Determine spawn position with platform and obstacle checks
+    let position = new THREE.Vector3(0, 0.5, 0); // Initialize with a default position
+    let maxAttempts = 50;
+    let validPosition = false;
+
+    // Collect all possible spawn locations
+    const spawnLocations: { position: THREE.Vector3, weight: number }[] = [];
+    
+    // Add platform spawn locations (with higher weight for platforms)
+    for (const platform of this.platforms) {
+      const platformBox = new THREE.Box3().setFromObject(platform);
+      const platformTop = platformBox.max.y;
+      
+      // Add one spawn point per platform with moderate weight
+      const platformSpawn = new THREE.Vector3(
+        platformBox.min.x + Math.random() * (platformBox.max.x - platformBox.min.x),
+        platformTop + 0.5,
+        platformBox.min.z + Math.random() * (platformBox.max.z - platformBox.min.z)
+      );
+      spawnLocations.push({ position: platformSpawn, weight: 1.5 }); // Moderate weight for platforms
+    }
+    
+    // Add ground spawn locations (increased number for better ground coverage)
+    for (let i = 0; i < 8; i++) {
+      const groundSpawn = new THREE.Vector3(
+        (Math.random() - 0.5) * (this.STAGE_SIZE - 10),
+        0.5,
+        (Math.random() - 0.5) * (this.STAGE_SIZE - 10)
+      );
+      spawnLocations.push({ position: groundSpawn, weight: 1.0 }); // Base weight for ground
+    }
+
+    // Shuffle and try spawn locations
+    while (!validPosition && maxAttempts > 0) {
+      // Select a spawn location based on weights
+      const totalWeight = spawnLocations.reduce((sum, loc) => sum + loc.weight, 0);
+      let randomWeight = Math.random() * totalWeight;
+      let selectedSpawn = spawnLocations[0].position;
+      
+      for (const location of spawnLocations) {
+        randomWeight -= location.weight;
+        if (randomWeight <= 0) {
+          selectedSpawn = location.position;
+          break;
+        }
+      }
+      
+      position = selectedSpawn.clone();
+
+      // Check for collisions with obstacles (trees and rocks)
+      let hasCollision = false;
+      const boneRadius = 0.5; // Approximate radius of the bone
+      const margin = 1.0; // Additional margin to prevent bones from being too close to obstacles
+
+      for (const object of this.collidableObjects) {
+        // Skip platforms in collision check since we want to spawn on them
+        if (this.platforms.includes(object as THREE.Mesh)) continue;
+
+        const objectBox = new THREE.Box3().setFromObject(object);
+        const objectCenter = new THREE.Vector3();
+        objectBox.getCenter(objectCenter);
+
+        // Expand the object's bounds by the margin
+        objectBox.expandByScalar(margin + boneRadius);
+
+        // Check if the bone position would be inside the expanded bounds
+        if (objectBox.containsPoint(position)) {
+          hasCollision = true;
+          break;
+        }
+      }
+
+      if (!hasCollision) {
+        validPosition = true;
+      }
+
+      maxAttempts--;
+    }
+
+    // If no valid position found after max attempts, use a fallback position
+    if (!validPosition) {
+      position = new THREE.Vector3(0, 0.5, 0);
+    }
+
+    boneGroup.position.copy(position);
+    boneGroup.rotation.y = Math.random() * Math.PI * 2; // Random initial rotation
+    boneGroup.name = 'bone'; // Set name for identification
     
     this.scene.add(boneGroup);
 
@@ -365,6 +443,7 @@ export class Stage {
       // Update position with boundary checks
       const nextX = bone.mesh.position.x + bone.velocity.x * deltaTime;
       const nextZ = bone.mesh.position.z + bone.velocity.z * deltaTime;
+      const nextY = bone.mesh.position.y + bone.velocity.y * deltaTime;
 
       // Check X boundaries
       if (nextX > STAGE_BOUND || nextX < -STAGE_BOUND) {
@@ -382,17 +461,27 @@ export class Stage {
         bone.mesh.position.z = nextZ;
       }
 
-      // Update Y position
-      bone.mesh.position.y += bone.velocity.y * deltaTime;
+      // Check for platform collisions
+      let hasLanded = false;
+      let landingY = 0.5; // Default ground level
 
-      // Apply rotation
-      bone.mesh.rotation.x += bone.rotationSpeed.x * deltaTime;
-      bone.mesh.rotation.y += bone.rotationSpeed.y * deltaTime;
-      bone.mesh.rotation.z += bone.rotationSpeed.z * deltaTime;
+      // Create a ray to check for platforms below the bone
+      const rayStart = new THREE.Vector3(bone.mesh.position.x, bone.mesh.position.y, bone.mesh.position.z);
+      const rayDir = new THREE.Vector3(0, -1, 0);
+      const raycaster = new THREE.Raycaster(rayStart, rayDir);
+      
+      // Check collisions with platforms
+      const platformIntersects = raycaster.intersectObjects(this.platforms);
+      if (platformIntersects.length > 0 && nextY <= platformIntersects[0].point.y + 0.5) {
+        hasLanded = true;
+        landingY = platformIntersects[0].point.y + 0.5;
+      } else if (nextY <= 0.5) { // Ground collision
+        hasLanded = true;
+        landingY = 0.5;
+      }
 
-      // Check if bone has landed
-      if (bone.mesh.position.y <= 0.5) {
-        bone.mesh.position.y = 0.5;
+      if (hasLanded) {
+        bone.mesh.position.y = landingY;
         bone.velocity.set(0, 0, 0);
         // Keep a slow spin after landing
         bone.rotationSpeed.set(0, 1, 0); // Only spin around Y axis
@@ -411,6 +500,14 @@ export class Stage {
           remainingBones.push(bone);
         }
       } else {
+        // Update Y position if not landed
+        bone.mesh.position.y = nextY;
+        
+        // Apply rotation
+        bone.mesh.rotation.x += bone.rotationSpeed.x * deltaTime;
+        bone.mesh.rotation.y += bone.rotationSpeed.y * deltaTime;
+        bone.mesh.rotation.z += bone.rotationSpeed.z * deltaTime;
+        
         // Keep bone if it hasn't landed yet
         remainingBones.push(bone);
       }
