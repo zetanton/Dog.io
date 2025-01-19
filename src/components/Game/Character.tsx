@@ -44,7 +44,7 @@ export class Character {
   readonly BITE_DURATION = 0.25;
   private readonly MIN_SIZE = 1;
   private readonly MAX_SIZE = 5;
-  private readonly GROWTH_PER_BONE = 0.05;
+  private readonly GROWTH_PER_BONE = 0.021;
   private readonly KNOCKBACK_DURATION = 0.5;
   private readonly BITE_LUNGE_DISTANCE = 0.5;
   readonly AI_MOVE_SPEED_MULTIPLIER = 1.2;
@@ -52,7 +52,7 @@ export class Character {
   private readonly HIT_FLASH_DURATION = 0.2;
   private readonly DEATH_ANIMATION_DURATION = 1.0;
   private readonly KNOCKBACK_SPEED = 1.0;
-  private readonly TARGET_BONES = 200;
+  private readonly TARGET_BONES = 190;
   readonly JUMP_FORCE = 0.2;
   private readonly GRAVITY = 0.008;
   private readonly GROUND_LEVEL = 0.5;
