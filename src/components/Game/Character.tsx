@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import AudioManager from '../../utils/AudioManager';
+import dogNames from '../../data/dogNames.json';
 
 interface CharacterState {
   position: {
@@ -88,7 +89,7 @@ export class Character {
     new THREE.Color(0xFFFFFF), // White
   ];
 
-  constructor(isAI: boolean, colorIndex: number, name: string = isAI ? `AI Dog ${colorIndex}` : 'Player') {
+  constructor(isAI: boolean, colorIndex: number, name: string = isAI ? dogNames.names[Math.floor(Math.random() * dogNames.names.length)] : 'Player') {
     this.isAI = isAI;
     this.state = {
       position: {

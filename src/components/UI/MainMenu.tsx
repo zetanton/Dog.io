@@ -208,7 +208,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
         containerRef.current.removeChild(renderer.domElement);
       }
     };
-  }, [selectedColor]);
+  }, []);
 
   const handleMuteToggle = () => {
     console.log('Mute button clicked');
