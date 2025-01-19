@@ -40,23 +40,23 @@ export class Character {
   legs: THREE.Mesh[] = [];
   tail: THREE.Mesh = new THREE.Mesh();
   readonly MOVE_SPEED = 0.08;
-  private readonly ROTATION_SPEED = 0.1;
+  protected readonly ROTATION_SPEED = 0.1;
   readonly BITE_DURATION = 0.25;
-  private readonly MIN_SIZE = 1;
-  private readonly MAX_SIZE = 5;
-  private readonly GROWTH_PER_BONE = 0.021;
-  private readonly KNOCKBACK_DURATION = 0.5;
-  private readonly BITE_LUNGE_DISTANCE = 0.5;
+  protected readonly MIN_SIZE = 1;
+  protected readonly MAX_SIZE = 5;
+  protected readonly GROWTH_PER_BONE = 0.021;
+  protected readonly KNOCKBACK_DURATION = 0.5;
+  protected readonly BITE_LUNGE_DISTANCE = 0.5;
   readonly AI_MOVE_SPEED_MULTIPLIER = 1.2;
-  private readonly BONES_TO_DROP = 3;
-  private readonly HIT_FLASH_DURATION = 0.2;
-  private readonly DEATH_ANIMATION_DURATION = 1.0;
-  private readonly KNOCKBACK_SPEED = 1.0;
-  private readonly TARGET_BONES = 190;
+  protected readonly BONES_TO_DROP = 3;
+  protected readonly HIT_FLASH_DURATION = 0.2;
+  protected readonly DEATH_ANIMATION_DURATION = 1.0;
+  protected readonly KNOCKBACK_SPEED = 1.0;
+  protected readonly TARGET_BONES = 190;
   readonly JUMP_FORCE = 0.2;
-  private readonly GRAVITY = 0.008;
-  private readonly GROUND_LEVEL = 0.5;
-  private readonly PLATFORM_LANDING_BUFFER = 0.3;
+  readonly GRAVITY = 0.008;
+  readonly GROUND_LEVEL = 0.5;
+  protected readonly PLATFORM_LANDING_BUFFER = 0.3;
   readonly BARK_COOLDOWN = 2;
   private aiController: AIController | null = null;
 
@@ -369,7 +369,7 @@ export class Character {
     this.dog.scale.setScalar(this.state.size * (1 - deathProgress));
   }
 
-  private checkGroundAndPlatformCollision(newPosition: THREE.Vector3, collidables?: THREE.Object3D[]): { collision: boolean, groundHeight: number } {
+  checkGroundAndPlatformCollision(newPosition: THREE.Vector3, collidables?: THREE.Object3D[]): { collision: boolean, groundHeight: number } {
     if (!collidables) return { collision: false, groundHeight: this.GROUND_LEVEL };
 
     let highestCollision = this.GROUND_LEVEL;

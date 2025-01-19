@@ -14,6 +14,17 @@ export class AIController {
     private readonly MINIMUM_SAFE_BONES = 3;
     private readonly REVENGE_DURATION = 60;
     private readonly REVENGE_DISTANCE = 30;
+    private readonly PLATFORM_DETECTION_RANGE = 15;
+    private readonly PLATFORM_HEIGHT_THRESHOLD = 3;
+    private readonly VERTICAL_ADVANTAGE_THRESHOLD = 5;
+    private readonly PLATFORM_JUMP_COOLDOWN = 180;
+    private readonly MIN_PLATFORM_JUMP_DISTANCE = 12;
+    private readonly SAME_SPOT_THRESHOLD = 3;
+    private readonly RANDOM_JUMP_CHANCE = 0.00005;
+    private readonly DEFENSIVE_JUMP_DISTANCE = 3;
+    private readonly DEFENSIVE_JUMP_CHANCE = 0.1;
+    private readonly STUCK_JUMP_CHANCE = 0.3;
+    private readonly MINIMUM_JUMP_INTERVAL = 120;
 
     private character: Character;
     private lastPositions: THREE.Vector3[] = [];
@@ -22,6 +33,9 @@ export class AIController {
     private lastDirection: THREE.Vector3 | null = null;
     private lastAttacker: Character | null = null;
     private revengeTimer: number = 0;
+    private platformJumpCooldown: number = 0;
+    private lastPlatformJumpPosition: THREE.Vector3 | null = null;
+    private lastJumpTime: number = 0;
 
     constructor(character: Character) {
         this.character = character;
@@ -132,6 +146,49 @@ export class AIController {
             this.revengeTimer--;
             if (this.revengeTimer <= 0) {
                 this.lastAttacker = null;
+            }
+        }
+
+        // Random jumping behavior (when not already jumping)
+        if (!this.character.state.isJumping && !this.character.state.isBiting) {
+            // Base random jumping
+            if (Math.random() < this.RANDOM_JUMP_CHANCE * deltaTime * 60) {
+                this.character.state.isJumping = true;
+                this.character.state.jumpVelocity = this.character.JUMP_FORCE * (0.8 + Math.random() * 0.4);
+                AudioManager.getInstance().playBarkSound(); // Sometimes bark when doing random jumps
+            }
+
+            // Defensive jumping when other dogs are nearby
+            if (allPlayers) {
+                const nearbyThreat = allPlayers.find(player => {
+                    if (player === this.character) return false;
+                    
+                    const distance = new THREE.Vector3(
+                        player.state.position.x - this.character.state.position.x,
+                        0,
+                        player.state.position.z - this.character.state.position.z
+                    ).length();
+
+                    return distance < this.DEFENSIVE_JUMP_DISTANCE && 
+                           player.state.isBiting && 
+                           player.state.bones >= this.character.state.bones;
+                });
+
+                if (nearbyThreat && Math.random() < this.DEFENSIVE_JUMP_CHANCE) {
+                    this.character.state.isJumping = true;
+                    this.character.state.jumpVelocity = this.character.JUMP_FORCE * 1.3; // Higher defensive jumps
+                    
+                    // Add some horizontal velocity away from the threat
+                    const awayDirection = new THREE.Vector3(
+                        this.character.state.position.x - nearbyThreat.state.position.x,
+                        0,
+                        this.character.state.position.z - nearbyThreat.state.position.z
+                    ).normalize();
+                    
+                    // Apply the evasive movement
+                    this.character.state.position.x += awayDirection.x * 2;
+                    this.character.state.position.z += awayDirection.z * 2;
+                }
             }
         }
 
@@ -308,6 +365,127 @@ export class AIController {
         }
     }
 
+    private detectPlatforms(collidables?: THREE.Object3D[]): { platform: THREE.Object3D, height: number }[] {
+        if (!collidables) return [];
+        
+        const platforms: { platform: THREE.Object3D, height: number }[] = [];
+        const currentHeight = this.character.state.position.y;
+        
+        // Cast rays in a circle around the character to detect platforms
+        const rayCount = 8;
+        for (let i = 0; i < rayCount; i++) {
+            const angle = (i / rayCount) * Math.PI * 2;
+            const direction = new THREE.Vector3(
+                Math.cos(angle),
+                0.5, // Slightly upward to detect platforms
+                Math.sin(angle)
+            ).normalize();
+
+            const raycaster = new THREE.Raycaster(
+                new THREE.Vector3(
+                    this.character.state.position.x,
+                    this.character.state.position.y,
+                    this.character.state.position.z
+                ),
+                direction,
+                0,
+                this.PLATFORM_DETECTION_RANGE
+            );
+
+            const intersects = raycaster.intersectObjects(collidables);
+            for (const intersect of intersects) {
+                const heightDiff = intersect.point.y - currentHeight;
+                if (heightDiff > 0 && heightDiff < this.PLATFORM_HEIGHT_THRESHOLD) {
+                    platforms.push({
+                        platform: intersect.object,
+                        height: heightDiff
+                    });
+                    break;
+                }
+            }
+        }
+
+        return platforms;
+    }
+
+    private shouldJumpToPlatform(
+        targetPosition: THREE.Vector3,
+        platforms: { platform: THREE.Object3D, height: number }[],
+        isPursuing: boolean,
+        isHuntingBones: boolean
+    ): boolean {
+        if (this.platformJumpCooldown > 0) return false;
+        if (this.character.state.isJumping) return false;
+        if (platforms.length === 0) return false;
+
+        // Check if we're too close to our last jump position
+        if (this.lastPlatformJumpPosition) {
+            const distanceFromLastJump = new THREE.Vector3(
+                this.character.state.position.x,
+                this.character.state.position.y,
+                this.character.state.position.z
+            ).distanceTo(this.lastPlatformJumpPosition);
+
+            // Avoid jumping if we're too close to our last jump position
+            if (distanceFromLastJump < this.MIN_PLATFORM_JUMP_DISTANCE) {
+                return false;
+            }
+
+            // If we're still near where we last jumped and not much higher, try to move away
+            if (distanceFromLastJump < this.SAME_SPOT_THRESHOLD && 
+                Math.abs(this.character.state.position.y - this.lastPlatformJumpPosition.y) < 1) {
+                return false;
+            }
+        }
+
+        const targetHeight = targetPosition.y;
+        const currentHeight = this.character.state.position.y;
+        const heightDiff = targetHeight - currentHeight;
+
+        // If target is significantly higher, try to find a platform to jump to
+        if (heightDiff > this.VERTICAL_ADVANTAGE_THRESHOLD) {
+            const suitablePlatform = platforms.find(p => {
+                // Check if this platform would actually help us reach the target
+                const platformHeightGain = p.height;
+                return platformHeightGain > 0 && 
+                       platformHeightGain < this.PLATFORM_HEIGHT_THRESHOLD &&
+                       platformHeightGain > heightDiff * 0.4; // Platform should help us gain at least 40% of needed height
+            });
+            if (suitablePlatform) return true;
+        }
+
+        // If being chased and lower than pursuer, look for higher ground
+        if (!isPursuing && heightDiff < -this.VERTICAL_ADVANTAGE_THRESHOLD) {
+            const escapePlatform = platforms.find(p => {
+                // Look for platforms that give us significant height advantage
+                const platformHeightGain = p.height;
+                return platformHeightGain > Math.abs(heightDiff) * 0.7 && 
+                       platformHeightGain < this.PLATFORM_HEIGHT_THRESHOLD &&
+                       (!this.lastPlatformJumpPosition || 
+                        platformHeightGain > this.lastPlatformJumpPosition.y - currentHeight); // Ensure we're gaining height
+            });
+            if (escapePlatform) return true;
+        }
+
+        // More strategic platform usage when hunting bones
+        if (isHuntingBones) {
+            // Find the highest reachable platform that we haven't jumped to recently
+            const bestPlatform = platforms.reduce((best, current) => {
+                if (current.height >= this.PLATFORM_HEIGHT_THRESHOLD) return best;
+                if (!best) return current;
+                return current.height > best.height ? current : best;
+            }, null as { platform: THREE.Object3D, height: number } | null);
+
+            if (bestPlatform && 
+                (!this.lastPlatformJumpPosition || 
+                 bestPlatform.height > this.lastPlatformJumpPosition.y - currentHeight + 0.5)) {
+                return Math.random() < 0.15; // Reduced random chance but better tactical choices
+            }
+        }
+
+        return false;
+    }
+
     private moveTowardsTarget(
         targetPosition: THREE.Vector3 | null,
         isPursuing: boolean,
@@ -317,6 +495,56 @@ export class AIController {
         collidables?: THREE.Object3D[],
         collidableBoxes?: THREE.Box3[]
     ) {
+        // Update cooldowns
+        if (this.platformJumpCooldown > 0) {
+            this.platformJumpCooldown--;
+        }
+        if (this.lastJumpTime > 0) {
+            this.lastJumpTime = Math.max(0, this.lastJumpTime - 1);
+        }
+
+        // Check for ground support and apply gravity
+        const currentPos = new THREE.Vector3(
+            this.character.state.position.x,
+            this.character.state.position.y,
+            this.character.state.position.z
+        );
+        const { collision: hasSupport } = this.character.checkGroundAndPlatformCollision(currentPos, collidables);
+
+        // If no support and not already jumping, start falling
+        if (!hasSupport && !this.character.state.isJumping && this.character.state.position.y > this.character.GROUND_LEVEL) {
+            this.character.state.isJumping = true;
+            this.character.state.jumpVelocity = 0;
+        }
+
+        // Apply gravity and update vertical position if jumping or falling
+        if (this.character.state.isJumping) {
+            this.character.state.jumpVelocity -= this.character.GRAVITY * deltaTime * 60;
+            const newPosition = new THREE.Vector3(
+                this.character.state.position.x,
+                this.character.state.position.y + this.character.state.jumpVelocity,
+                this.character.state.position.z
+            );
+
+            const { collision, groundHeight } = this.character.checkGroundAndPlatformCollision(newPosition, collidables);
+
+            if (this.character.state.jumpVelocity < 0 && (collision || newPosition.y <= groundHeight)) {
+                this.character.state.position.y = groundHeight;
+                this.character.state.isJumping = false;
+                this.character.state.jumpVelocity = 0;
+            } else {
+                this.character.state.position.y = newPosition.y;
+            }
+        }
+
+        // Function to check if we can attempt a jump
+        const canAttemptJump = () => {
+            return !this.character.state.isJumping && 
+                   !this.character.state.isBiting && 
+                   this.lastJumpTime <= 0 &&
+                   this.character.state.knockbackTime <= 0;
+        };
+
         if (targetPosition) {
             const direction = new THREE.Vector3(
                 targetPosition.x - this.character.state.position.x,
@@ -325,6 +553,19 @@ export class AIController {
             ).normalize();
 
             const isCurrentlyStuck = this.isStuck();
+            const nearbyPlatforms = this.detectPlatforms(collidables);
+            
+            // Platform jumping logic
+            if (this.shouldJumpToPlatform(targetPosition, nearbyPlatforms, isPursuing, isHuntingBones)) {
+                this.character.state.isJumping = true;
+                this.character.state.jumpVelocity = this.character.JUMP_FORCE * 1.2;
+                this.platformJumpCooldown = this.PLATFORM_JUMP_COOLDOWN;
+                this.lastPlatformJumpPosition = new THREE.Vector3(
+                    this.character.state.position.x,
+                    this.character.state.position.y,
+                    this.character.state.position.z
+                );
+            }
 
             // Enhanced obstacle detection using multiple raycasters
             const mainRaycaster = new THREE.Raycaster(
@@ -367,11 +608,12 @@ export class AIController {
                     this.lastDirection = this.findAlternativeDirection(direction, collidables);
                     this.directionChangeCounter = this.DIRECTION_CHANGE_DURATION;
                     
-                    // More aggressive jumping when stuck
-                    if (!this.character.state.isJumping && Math.random() < 0.9) {
+                    // More conservative jumping when stuck
+                    if (canAttemptJump() && Math.random() < this.STUCK_JUMP_CHANCE) {
                         this.character.state.isJumping = true;
                         this.character.state.jumpVelocity = this.character.JUMP_FORCE * 
                             (isCurrentlyStuck ? 1.4 : 1.2);
+                        this.lastJumpTime = this.MINIMUM_JUMP_INTERVAL;
                     }
                 }
                 
@@ -412,19 +654,39 @@ export class AIController {
                 this.character.state.position.z + direction.z * moveSpeed
             );
 
-            const shouldJump = obstacles.length > 0 && !this.character.state.isJumping;
-
-            if (shouldJump) {
-                const jumpChance = isPursuing ? 0.6 : (isHuntingBones ? 0.5 : 0.4);
-                if (Math.random() < jumpChance) {
+            // Random jumping behavior with stricter conditions
+            if (canAttemptJump()) {
+                // Base random jumping - only when actively hunting bones
+                if (isHuntingBones && !isPursuing && 
+                    Math.random() < this.RANDOM_JUMP_CHANCE * deltaTime * 60) {
                     this.character.state.isJumping = true;
-                    this.character.state.jumpVelocity = this.character.JUMP_FORCE * (isPursuing ? 1.2 : 1.0);
+                    this.character.state.jumpVelocity = this.character.JUMP_FORCE * 0.8;
+                    this.lastJumpTime = this.MINIMUM_JUMP_INTERVAL;
+                    if (Math.random() < 0.2) { // Further reduced bark chance
+                        AudioManager.getInstance().playBarkSound();
+                    }
                 }
-            }
 
-            if (isPursuing && !this.character.state.isJumping && Math.random() < 0.03) {
-                this.character.state.isJumping = true;
-                this.character.state.jumpVelocity = this.character.JUMP_FORCE * 1.1;
+                // Defensive jumping only when being chased and at a disadvantage
+                if (!isPursuing && obstacles.length > 0 && 
+                    obstacles[0].distance < this.DEFENSIVE_JUMP_DISTANCE && 
+                    this.character.state.bones < 5 && // Only jump away if we have few bones
+                    Math.random() < this.DEFENSIVE_JUMP_CHANCE) {
+                    this.character.state.isJumping = true;
+                    this.character.state.jumpVelocity = this.character.JUMP_FORCE * 1.3;
+                    this.lastJumpTime = this.MINIMUM_JUMP_INTERVAL;
+                    
+                    // Add some horizontal velocity away from the obstacle
+                    const awayDirection = new THREE.Vector3(
+                        this.character.state.position.x - obstacles[0].point.x,
+                        0,
+                        this.character.state.position.z - obstacles[0].point.z
+                    ).normalize();
+                    
+                    // Apply the evasive movement
+                    this.character.state.position.x += awayDirection.x * 2;
+                    this.character.state.position.z += awayDirection.z * 2;
+                }
             }
 
             if (!this.character.checkCollision(newPosition, collidables, collidableBoxes)) {
@@ -433,11 +695,13 @@ export class AIController {
                 this.character.state.isMoving = true;
             }
         } else {
-            if (Math.random() < 0.04 * deltaTime * 60) {
+            // Drastically reduced idle jumping
+            if (Math.random() < 0.01 * deltaTime * 60) { // Reduced from 0.02 to 0.01
                 this.character.state.rotation += (Math.random() - 0.5) * Math.PI * deltaTime;
-                if (!this.character.state.isJumping && Math.random() < 0.15) {
+                if (canAttemptJump() && Math.random() < 0.02) { // Reduced from 0.05 to 0.02
                     this.character.state.isJumping = true;
-                    this.character.state.jumpVelocity = this.character.JUMP_FORCE;
+                    this.character.state.jumpVelocity = this.character.JUMP_FORCE * 0.8; // Reduced jump force
+                    this.lastJumpTime = this.MINIMUM_JUMP_INTERVAL;
                 }
             }
         }
