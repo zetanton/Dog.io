@@ -6,6 +6,7 @@ import { Hydrant } from './Hydrant';
 import PowerCooldown from '../UI/PowerCooldown';
 import AudioManager from '../../utils/AudioManager';
 import { FaVolumeUp, FaVolumeMute } from 'react-icons/fa';
+import WinModal from '../UI/WinModal';
 
 interface GameState {
   scene: THREE.Scene;
@@ -21,15 +22,18 @@ interface GameState {
 interface GameProps {
   playerName: string;
   colorIndex: number;
+  onReturnToMenu: () => void;
 }
 
-const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
+const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const gameStateRef = useRef<GameState | null>(null);
   const [scores, setScores] = useState<{bones: number, size: number}>({ bones: 0, size: 1 });
   const [players, setPlayers] = useState<Character[]>([]);
   const [isMuted, setIsMuted] = useState(AudioManager.getInstance().isSoundMuted());
   const [hydrantCooldown, setHydrantCooldown] = useState(0);
+  const [showWinModal, setShowWinModal] = useState(false);
+  const [winner, setWinner] = useState<Character | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -169,61 +173,77 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
       const deltaTime = (currentTime - gameStateRef.current.lastTime) / 1000;
       gameStateRef.current.lastTime = currentTime;
 
-      // Update hydrant cooldown
-      const timeSinceLastHydrant = Date.now() - Hydrant.lastSpawnTime;
-      const cooldownProgress = Math.min(timeSinceLastHydrant / Hydrant.COOLDOWN, 1);
-      setHydrantCooldown(cooldownProgress);
+      // Check for win condition
+      if (player.state.hasWon && !showWinModal) {
+        setShowWinModal(true);
+        setWinner(player);
+        // Stop all character movement
+        stage.players.forEach(p => {
+          p.state.isMoving = false;
+          p.state.isBiting = false;
+        });
+        // Set final scores and leaderboard
+        setScores({
+          bones: player.state.bones,
+          size: player.state.size
+        });
+        setPlayers([...stage.players]);
+      }
 
-      // Update hydrants and remove inactive ones
-      gameStateRef.current.hydrants = gameStateRef.current.hydrants.filter(hydrant => {
-        hydrant.update([player, ...stage.players]);
-        if (hydrant.shouldRemove()) {
-          scene.remove(hydrant.mesh);
-          return false;
-        }
-        return true;
-      });
+      if (!showWinModal) {
+        // Update hydrant cooldown
+        const timeSinceLastHydrant = Date.now() - Hydrant.lastSpawnTime;
+        setHydrantCooldown(Math.min(1, timeSinceLastHydrant / Hydrant.COOLDOWN));
 
-      // Update game state
-      stage.update(deltaTime, keys, camera);
+        // Update hydrants and remove inactive ones
+        gameStateRef.current.hydrants = gameStateRef.current.hydrants.filter(hydrant => {
+          hydrant.update([player, ...stage.players]);
+          if (hydrant.shouldRemove()) {
+            scene.remove(hydrant.mesh);
+            return false;
+          }
+          return true;
+        });
 
-      // Update UI state
-      setScores({
-        bones: player.state.bones,
-        size: player.state.size
-      });
-      setPlayers([...stage.players]);
+        // Update game state
+        stage.update(deltaTime, keys, camera);
 
-      // Update camera position to follow player
-      const cameraHeight = 15;
-      const cameraDistance = 20;
-      const lookAtHeight = 2;
+        // Update scores and players only if game is not won
+        setScores({
+          bones: player.state.bones,
+          size: player.state.size
+        });
+        setPlayers([...stage.players]);
 
-      // Calculate target camera position
-      const targetCameraPos = new THREE.Vector3(
-        player.state.position.x,
-        cameraHeight,
-        player.state.position.z + cameraDistance
-      );
+        // Update camera position
+        const cameraHeight = 15;
+        const cameraDistance = 20;
+        const lookAtHeight = 2;
 
-      // Smoothly interpolate camera position
-      camera.position.lerp(targetCameraPos, 0.1);
+        // Calculate target camera position
+        const targetPosition = new THREE.Vector3(
+          player.state.position.x,
+          cameraHeight,
+          player.state.position.z + cameraDistance
+        );
+        camera.position.lerp(targetPosition, 0.1);
 
-      // Calculate target look-at position
-      const targetLookAt = new THREE.Vector3(
-        player.state.position.x,
-        lookAtHeight,
-        player.state.position.z
-      );
+        // Calculate target look-at position
+        const targetLookAt = new THREE.Vector3(
+          player.state.position.x,
+          lookAtHeight,
+          player.state.position.z
+        );
 
-      // Smoothly interpolate look-at position
-      const currentLookAt = new THREE.Vector3();
-      camera.getWorldDirection(currentLookAt);
-      const targetDirection = targetLookAt.clone().sub(camera.position).normalize();
-      const newDirection = currentLookAt.lerp(targetDirection, 0.1);
-      camera.lookAt(camera.position.clone().add(newDirection));
+        // Smoothly interpolate look-at position
+        const currentLookAt = new THREE.Vector3();
+        camera.getWorldDirection(currentLookAt);
+        const targetDirection = targetLookAt.clone().sub(camera.position).normalize();
+        const newDirection = currentLookAt.lerp(targetDirection, 0.1);
+        camera.lookAt(camera.position.clone().add(newDirection));
+      }
 
-      // Render scene
+      // Always render the scene
       renderer.render(scene, camera);
       requestAnimationFrame(animate);
     };
@@ -251,6 +271,13 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
     const audioManager = AudioManager.getInstance();
     const newMutedState = audioManager.toggleMute();
     setIsMuted(newMutedState);
+  };
+
+  const handlePlayAgain = () => {
+    if (gameStateRef.current?.stage) {
+      gameStateRef.current.stage.reset();
+      setShowWinModal(false);
+    }
   };
 
   return (
@@ -315,6 +342,15 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
           <div className="text-white text-center text-sm mt-1">H</div>
         </div>
       </div>
+
+      {/* Win Modal */}
+      {showWinModal && winner && (
+        <WinModal
+          playerName={winner.state.name}
+          onPlayAgain={handlePlayAgain}
+          onReturnToMenu={onReturnToMenu}
+        />
+      )}
     </div>
   );
 };

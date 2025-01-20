@@ -699,8 +699,9 @@ export class Character {
       this.MIN_SIZE + (this.state.bones * this.GROWTH_PER_BONE)
     );
     
-    // Check for win condition
-    if (this.state.bones >= this.TARGET_BONES) {
+    // Check for win condition at exactly 100 bones
+    if (this.state.bones >= 100) {
+      this.state.bones = 100;
       this.state.hasWon = true;
     }
     
