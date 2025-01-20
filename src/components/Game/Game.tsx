@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Character } from './Character';
 import { Stage } from './Stage';
+import { Hydrant } from './Hydrant';
 import AudioManager from '../../utils/AudioManager';
 import { FaVolumeUp, FaVolumeMute } from 'react-icons/fa';
 
@@ -13,6 +14,7 @@ interface GameState {
   player: Character;
   lastTime: number;
   keys: { [key: string]: boolean };
+  hydrants: Hydrant[];
 }
 
 interface GameProps {
@@ -97,6 +99,7 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
       player,
       lastTime: performance.now(),
       keys: {},
+      hydrants: [],
     };
 
     // Handle window resize
@@ -119,6 +122,19 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
       }
       
       gameStateRef.current.keys[e.key.toLowerCase()] = true;
+
+      // Handle hydrant spawn on 'h' key press
+      if (e.key.toLowerCase() === 'h') {
+        if (Hydrant.canSpawn()) {
+          const playerPos = gameStateRef.current.player.state.position;
+          const hydrant = new Hydrant(
+            new THREE.Vector3(playerPos.x, 0, playerPos.z),
+            gameStateRef.current.player
+          );
+          gameStateRef.current.hydrants.push(hydrant);
+          gameStateRef.current.scene.add(hydrant.mesh);
+        }
+      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -150,6 +166,16 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
       const currentTime = performance.now();
       const deltaTime = (currentTime - gameStateRef.current.lastTime) / 1000;
       gameStateRef.current.lastTime = currentTime;
+
+      // Update hydrants and remove inactive ones
+      gameStateRef.current.hydrants = gameStateRef.current.hydrants.filter(hydrant => {
+        hydrant.update([player, ...stage.players]);
+        if (hydrant.shouldRemove()) {
+          scene.remove(hydrant.mesh);
+          return false;
+        }
+        return true;
+      });
 
       // Update game state
       stage.update(deltaTime, keys, camera);
@@ -206,6 +232,11 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
         containerRef.current.removeChild(nameTagsContainer);
       }
       audioManager.stopGameMusic();
+      if (gameStateRef.current) {
+        gameStateRef.current.hydrants.forEach(hydrant => {
+          scene.remove(hydrant.mesh);
+        });
+      }
     };
   }, [playerName, colorIndex]);
 
