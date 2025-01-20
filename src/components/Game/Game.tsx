@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { Character } from './Character';
 import { Stage } from './Stage';
 import { Hydrant } from './Hydrant';
+import PowerCooldown from '../UI/PowerCooldown';
 import AudioManager from '../../utils/AudioManager';
 import { FaVolumeUp, FaVolumeMute } from 'react-icons/fa';
 
@@ -28,6 +29,7 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
   const [scores, setScores] = useState<{bones: number, size: number}>({ bones: 0, size: 1 });
   const [players, setPlayers] = useState<Character[]>([]);
   const [isMuted, setIsMuted] = useState(AudioManager.getInstance().isSoundMuted());
+  const [hydrantCooldown, setHydrantCooldown] = useState(0);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -167,6 +169,11 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
       const deltaTime = (currentTime - gameStateRef.current.lastTime) / 1000;
       gameStateRef.current.lastTime = currentTime;
 
+      // Update hydrant cooldown
+      const timeSinceLastHydrant = Date.now() - Hydrant.lastSpawnTime;
+      const cooldownProgress = Math.min(timeSinceLastHydrant / Hydrant.COOLDOWN, 1);
+      setHydrantCooldown(cooldownProgress);
+
       // Update hydrants and remove inactive ones
       gameStateRef.current.hydrants = gameStateRef.current.hydrants.filter(hydrant => {
         hydrant.update([player, ...stage.players]);
@@ -295,6 +302,17 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex }) => {
                 </div>
               ))}
           </div>
+        </div>
+      </div>
+
+      {/* Powers UI */}
+      <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex gap-4">
+        <div className="bg-black bg-opacity-50 p-2 rounded-lg backdrop-blur-sm">
+          <PowerCooldown
+            isOnCooldown={hydrantCooldown < 1}
+            cooldownProgress={hydrantCooldown}
+          />
+          <div className="text-white text-center text-sm mt-1">H</div>
         </div>
       </div>
     </div>
