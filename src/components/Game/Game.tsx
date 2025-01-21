@@ -61,6 +61,7 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) =
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.localClippingEnabled = true; // Enable clipping planes
     containerRef.current.appendChild(renderer.domElement);
 
     // Create HTML container for name tags

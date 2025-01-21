@@ -10,6 +10,7 @@ export class Hydrant {
     private readonly POSITION_CHANGE_FACTOR = 0.03; // Reduced from 0.1 for slower direct position change
     private readonly DURATION = 5000;
     private readonly MAX_SPEED = 0.3; // Reduced max speed for slower movement
+    private readonly STAGE_SIZE = 100; // Match the stage size from Stage.tsx
     private spawnTime: number;
     private isActive: boolean = true;
     static readonly COOLDOWN = 15000; // 15 seconds cooldown
@@ -19,12 +20,23 @@ export class Hydrant {
     private pulseRings: THREE.Mesh[] = [];
     private readonly NUM_PULSE_RINGS = 3;
     private readonly PULSE_SPEED = 2;
+    private clippingPlanes: THREE.Plane[];
 
     constructor(position: THREE.Vector3, owner: Character) {
         this.position = position;
         this.owner = owner;
         this.spawnTime = Date.now();
         Hydrant.lastSpawnTime = Date.now();
+        
+        // Create clipping planes for the stage boundaries
+        const halfSize = this.STAGE_SIZE / 2;
+        this.clippingPlanes = [
+            new THREE.Plane(new THREE.Vector3(1, 0, 0), halfSize),   // Right wall
+            new THREE.Plane(new THREE.Vector3(-1, 0, 0), halfSize),  // Left wall
+            new THREE.Plane(new THREE.Vector3(0, 0, 1), halfSize),   // Front wall
+            new THREE.Plane(new THREE.Vector3(0, 0, -1), halfSize)   // Back wall
+        ];
+        
         this.mesh = this.createHydrant();
         this.radiusIndicator = this.createRadiusIndicator();
         this.createPulseRings();
@@ -40,7 +52,8 @@ export class Hydrant {
                 color: 0xff0000,
                 transparent: true,
                 opacity: 0.3,
-                side: THREE.DoubleSide
+                side: THREE.DoubleSide,
+                clippingPlanes: this.clippingPlanes
             });
             const ring = new THREE.Mesh(geometry, material);
             ring.rotation.x = -Math.PI / 2;
@@ -78,7 +91,8 @@ export class Hydrant {
             color: 0xff0000,
             transparent: true,
             opacity: 0.2,
-            side: THREE.DoubleSide
+            side: THREE.DoubleSide,
+            clippingPlanes: this.clippingPlanes
         });
         const circle = new THREE.Mesh(geometry, material);
         

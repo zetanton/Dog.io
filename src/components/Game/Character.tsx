@@ -78,10 +78,12 @@ export class Character {
   readonly MARKING_EXPAND_DURATION = 1; // seconds to reach full radius
   readonly MARKING_PUSH_FORCE = 0.5;
   readonly MARKING_ANIMATION_DURATION = 1; // seconds for leg lift animation
+  private readonly STAGE_SIZE = 100; // Match the stage size from Stage.tsx
   private aiController: AIController | null = null;
   private barkText?: THREE.Mesh;
   readonly BARK_ANIMATION_DURATION = 0.4; // seconds, slightly longer for text animation
   readonly BARK_WORDS = ['WOOF!', 'BARK!'];
+  private clippingPlanes: THREE.Plane[];
 
   static readonly DOG_COLORS = [
     new THREE.Color(0x8B4513), // Brown
@@ -103,6 +105,16 @@ export class Character {
     if (isAI) {
       this.aiController = new AIController(this);
     }
+
+    // Create clipping planes for the stage boundaries
+    const halfSize = this.STAGE_SIZE / 2;
+    this.clippingPlanes = [
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), halfSize),   // Right wall
+      new THREE.Plane(new THREE.Vector3(-1, 0, 0), halfSize),  // Left wall
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), halfSize),   // Front wall
+      new THREE.Plane(new THREE.Vector3(0, 0, -1), halfSize)   // Back wall
+    ];
+
     this.state = {
       position: {
         x: 0,
@@ -555,7 +567,8 @@ export class Character {
       color: 0xFFEB3B,
       transparent: true,
       opacity: 0.3,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      clippingPlanes: this.clippingPlanes
     });
     const circle = new THREE.Mesh(geometry, material);
     circle.rotation.x = -Math.PI / 2; // Lay flat on the ground
