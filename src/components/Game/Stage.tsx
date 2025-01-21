@@ -7,6 +7,7 @@ import TWEEN from '@tweenjs/tween.js';
 interface Bone {
   mesh: THREE.Object3D;
   position: THREE.Vector3;
+  lastPosition?: THREE.Vector3;
   collected: boolean;
   timestamp: number;
   lifespan?: number; // Optional lifespan in milliseconds
@@ -375,7 +376,8 @@ export class Stage {
 
     return {
       mesh: boneGroup,
-      position: position,
+      position: position.clone(),
+      lastPosition: position.clone(),
       collected: false,
       timestamp: Date.now()
     };
@@ -450,6 +452,7 @@ export class Stage {
     return {
         mesh: boneGroup,
         position: position.clone(),
+        lastPosition: position.clone(),
         collected: false,
         timestamp: Date.now()
     };
@@ -708,18 +711,29 @@ export class Stage {
       }
     }
 
-    if (!bone.collected) {
-      const { x, z } = this.getGridCoordinates(bone.mesh.position);
-      this.spatialGrid[x][z].add(bone);
-      
-      // Update or create bounding box
-      let box = this.boneBoundingBoxes.get(bone);
-      if (!box) {
-        box = new THREE.Box3();
-        this.boneBoundingBoxes.set(bone, box);
-      }
-      box.setFromObject(bone.mesh);
+    if (bone.collected) {
+      return;
     }
+
+    // Initialize lastPosition if it doesn't exist
+    if (!bone.lastPosition) {
+      bone.lastPosition = bone.position.clone();
+    }
+
+    // Always add to current position's grid cell
+    const { x, z } = this.getGridCoordinates(bone.position);
+    this.spatialGrid[x][z].add(bone);
+
+    // Update bounding box
+    let box = this.boneBoundingBoxes.get(bone);
+    if (!box) {
+      box = new THREE.Box3();
+      this.boneBoundingBoxes.set(bone, box);
+    }
+    box.setFromObject(bone.mesh);
+
+    // Update lastPosition
+    bone.lastPosition.copy(bone.position);
   }
 
   private getNearbyBones(position: THREE.Vector3, radius: number = this.CELL_SIZE): Bone[] {
@@ -749,6 +763,8 @@ export class Stage {
     // Update spatial grid for all bones
     [...this.bones, ...this.droppingBones].forEach(bone => {
       if (!bone.collected) {
+        // Update position from mesh before spatial grid update
+        bone.position.copy(bone.mesh.position);
         this.updateBoneSpatialPosition(bone);
 
         // Check for expired bones
@@ -774,7 +790,7 @@ export class Stage {
       }
     });
 
-    // Update player bounding boxes
+    // Update player bounding boxes with more precise collision areas
     for (const player of this.players) {
       if (!player.state.isDying) {
         let box = this.playerBoundingBoxes.get(player);
@@ -782,7 +798,30 @@ export class Stage {
           box = new THREE.Box3();
           this.playerBoundingBoxes.set(player, box);
         }
-        box.setFromObject(player.dog);
+        
+        // Create a more precise bounding box for the dog model
+        // Use a smaller box that better matches the dog's actual body
+        const dogPosition = new THREE.Vector3(
+          player.state.position.x,
+          player.state.position.y,
+          player.state.position.z
+        );
+        
+        // Calculate a more precise box size based on the dog's actual model proportions
+        const bodyWidth = 0.8 * player.state.size;  // Reduced from full size
+        const bodyHeight = 0.6 * player.state.size; // Lower height to match body
+        const bodyLength = 1.2 * player.state.size; // Slightly longer for body
+        
+        box.min.set(
+          dogPosition.x - bodyWidth/2,
+          dogPosition.y,
+          dogPosition.z - bodyLength/2
+        );
+        box.max.set(
+          dogPosition.x + bodyWidth/2,
+          dogPosition.y + bodyHeight,
+          dogPosition.z + bodyLength/2
+        );
       }
     }
 
@@ -873,7 +912,7 @@ export class Stage {
     }
     this.droppingBones = remainingBones;
 
-    // Optimized bone collection using spatial partitioning
+    // Optimized bone collection using spatial partitioning and precise collision
     for (const player of this.players) {
       if (!player.state.isDying && !player.state.isHit && player.state.knockbackTime <= 0) {
         const playerBox = this.playerBoundingBoxes.get(player);
@@ -889,11 +928,25 @@ export class Stage {
           // Additional validation to prevent erroneous collections
           if (!bone.collected && 
               bone.mesh && 
-              bone.mesh.id && // Check that id exists
+              bone.mesh.id && 
               this.scene.getObjectById(bone.mesh.id) && 
               (!('collectionDelay' in bone) || ((bone as DroppingBone).collectionDelay ?? 0) <= 0)) {
-            const boneBox = this.boneBoundingBoxes.get(bone);
-            if (boneBox && playerBox.intersectsBox(boneBox)) {
+            
+            // Create a sphere for the bone with a small radius
+            const boneRadius = 0.3; // Smaller, more precise radius for bones
+            const bonePosition = bone.mesh.position;
+            
+            // Check if the bone's sphere intersects with the dog's precise bounding box
+            const sphereIntersectsBox = (
+              bonePosition.x + boneRadius >= playerBox.min.x &&
+              bonePosition.x - boneRadius <= playerBox.max.x &&
+              bonePosition.y + boneRadius >= playerBox.min.y &&
+              bonePosition.y - boneRadius <= playerBox.max.y &&
+              bonePosition.z + boneRadius >= playerBox.min.z &&
+              bonePosition.z - boneRadius <= playerBox.max.z
+            );
+
+            if (sphereIntersectsBox) {
               // Mark as collected before processing to prevent double collection
               bone.collected = true;
               this.cleanupBone(bone);
