@@ -509,6 +509,8 @@ export class AIController {
             if (Math.random() < barkChance) {
                 AudioManager.getInstance().playBarkSound();
                 this.character.state.barkCooldown = this.character.BARK_COOLDOWN;
+                this.character.state.isBarking = true;
+                this.character.state.barkAnimationTime = 0;
             }
         }
     }

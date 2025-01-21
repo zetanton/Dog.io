@@ -37,6 +37,8 @@ interface CharacterState {
   markingRadius: number;
   markingPosition?: THREE.Vector3;
   markingAnimationTime: number;
+  isBarking: boolean;
+  barkAnimationTime: number;
 }
 
 export class Character {
@@ -77,6 +79,9 @@ export class Character {
   readonly MARKING_PUSH_FORCE = 0.5;
   readonly MARKING_ANIMATION_DURATION = 1; // seconds for leg lift animation
   private aiController: AIController | null = null;
+  private barkText?: THREE.Mesh;
+  readonly BARK_ANIMATION_DURATION = 0.4; // seconds, slightly longer for text animation
+  readonly BARK_WORDS = ['WOOF!', 'BARK!'];
 
   static readonly DOG_COLORS = [
     new THREE.Color(0x8B4513), // Brown
@@ -132,6 +137,8 @@ export class Character {
       markingRadius: 0,
       markingPosition: undefined,
       markingAnimationTime: 0,
+      isBarking: false,
+      barkAnimationTime: 0,
     };
 
     this.dog = this.createDog();
@@ -212,6 +219,43 @@ export class Character {
 
     // Rotate the entire body group 180 degrees so it faces forward
     this.bodyGroup.rotation.y = Math.PI;
+    
+    // Remove bark lines section and keep only text
+    const barkGroup = new THREE.Group();
+    
+    // Create text as a textured plane
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    canvas.width = 1024; // Doubled for higher resolution
+    canvas.height = 512;
+    
+    // Set up text style with larger, bolder text
+    context.font = 'bold 240px Arial'; // Doubled font size
+    context.textAlign = 'center';
+    context.fillStyle = 'black';
+    context.fillText('WOOF!', canvas.width/2, canvas.height/2);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    const textMaterial = new THREE.MeshBasicMaterial({ 
+      map: texture,
+      transparent: true,
+      opacity: 1,
+      side: THREE.DoubleSide,
+      depthTest: false,
+      depthWrite: false
+    });
+    
+    // Create a larger plane for the text (doubled size)
+    const textGeometry = new THREE.PlaneGeometry(2.4, 1.2);
+    this.barkText = new THREE.Mesh(textGeometry, textMaterial);
+    this.barkText.visible = false;
+    
+    // Add text to the head group
+    this.headGroup.add(this.barkText);
+    
+    // Position bark group in front of snout
+    barkGroup.position.set(0, 0, 0.5);
+    this.headGroup.add(barkGroup);
     
     group.add(this.bodyGroup);
     return group;
@@ -298,6 +342,9 @@ export class Character {
   checkCollision(newPosition: THREE.Vector3, collidables?: THREE.Object3D[], collidableBoxes?: THREE.Box3[]): boolean {
     if (!collidables) return false;
     
+    // Filter out sprites from collision checks
+    const filteredCollidables = collidables.filter(obj => !(obj instanceof THREE.Sprite));
+    
     // Create a temporary bounding box at the new position
     const tempState = { ...this.state, position: { x: newPosition.x, y: newPosition.y, z: newPosition.z } };
     const tempThis = { ...this, state: tempState };
@@ -326,6 +373,9 @@ export class Character {
       // Don't collide with self or parts of self
       if (obj === this.dog || obj.parent === this.dog) return false;
       
+      // Skip sprites
+      if (obj instanceof THREE.Sprite) return false;
+      
       // Always check collision with other dogs (they'll be THREE.Group)
       if (obj instanceof THREE.Group) return true;
       
@@ -348,7 +398,7 @@ export class Character {
     // Use cached boxes if available
     if (collidableBoxes) {
       for (let i = 0; i < collidableBoxes.length; i++) {
-        const obj = collidables[i];
+        const obj = filteredCollidables[i];
         if (shouldCheckCollision(obj)) {
           const objectBox = collidableBoxes[i];
           // Only collide if we're at the same height as the object
@@ -361,7 +411,7 @@ export class Character {
     }
 
     // Fallback to computing boxes if not cached
-    for (const object of collidables) {
+    for (const object of filteredCollidables) {
       if (shouldCheckCollision(object)) {
         const objectBox = new THREE.Box3().setFromObject(object);
         if (checkOverlap(characterBox, objectBox)) {
@@ -406,10 +456,13 @@ export class Character {
     const rayDirection = new THREE.Vector3(0, -1, 0);
     const raycaster = new THREE.Raycaster(rayStart, rayDirection);
 
-    // Filter only platform objects (exclude the dog and its parts)
+    // Filter only platform objects (exclude the dog, its parts, and sprites)
     const platforms = collidables.filter(obj => {
       // Don't check collisions with self
       if (obj === this.dog || obj.parent === this.dog) return false;
+      
+      // Skip sprites
+      if (obj instanceof THREE.Sprite) return false;
       
       // Get the object's dimensions
       const box = new THREE.Box3().setFromObject(obj);
@@ -650,6 +703,11 @@ export class Character {
       });
     }
 
+    // Handle bark animation
+    if (this.state.isBarking) {
+      this.animateBark(deltaTime);
+    }
+
     if (this.isAI) {
       this.aiController?.update(deltaTime, collidables, collidableBoxes, allPlayers);
     } else {
@@ -679,6 +737,12 @@ export class Character {
         if (keys['r'] && this.state.barkCooldown <= 0) {
           AudioManager.getInstance().playBarkSound();
           this.state.barkCooldown = this.BARK_COOLDOWN;
+          this.state.isBarking = true;
+          this.state.barkAnimationTime = 0;
+          
+          // Update bark text randomly
+          const word = this.BARK_WORDS[Math.floor(Math.random() * this.BARK_WORDS.length)];
+          this.updateBarkText(word);
         }
 
         // Handle zoomies activation
@@ -1026,6 +1090,61 @@ export class Character {
     this.state.hasWon = false;
     
     this.updateDogPosition();
+  }
+
+  private updateBarkText(word: string) {
+    if (!this.barkText) return;
+    
+    const material = this.barkText.material as THREE.MeshBasicMaterial;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    canvas.width = 1024;
+    canvas.height = 512;
+    
+    // Larger, bolder text
+    context.font = 'bold 240px Arial'; // Doubled font size
+    context.textAlign = 'center';
+    context.fillStyle = 'black';
+    context.fillText(word, canvas.width/2, canvas.height/2);
+    
+    if (material.map) material.map.dispose();
+    material.map = new THREE.CanvasTexture(canvas);
+    material.needsUpdate = true;
+  }
+
+  private animateBark(deltaTime: number) {
+    if (!this.state.isBarking) return;
+    
+    this.state.barkAnimationTime += deltaTime;
+    const progress = this.state.barkAnimationTime / this.BARK_ANIMATION_DURATION;
+    
+    if (progress >= 1) {
+      this.state.isBarking = false;
+      this.state.barkAnimationTime = 0;
+      if (this.barkText) this.barkText.visible = false;
+      return;
+    }
+    
+    // Animate text
+    if (this.barkText) {
+      // Use sine wave for opacity to fade in/out smoothly
+      const opacity = Math.sin(progress * Math.PI);
+      const material = this.barkText.material as THREE.MeshBasicMaterial;
+      material.opacity = opacity;
+      this.barkText.visible = true;
+
+      // Position text in front of the dog's mouth and make it float up
+      const moveProgress = progress * 1.5;
+      // Start in front of mouth and move up
+      this.barkText.position.set(0, 0.3 + moveProgress * 0.5, 1.0);
+      
+      // Make text face the camera by rotating it to match dog's rotation plus 180 degrees
+      this.barkText.rotation.y = -this.state.rotation + Math.PI;
+
+      // Scale text for emphasis
+      const scale = 1 + Math.sin(progress * Math.PI) * 0.3;
+      this.barkText.scale.set(scale, scale, 1);
+    }
   }
 }
 
