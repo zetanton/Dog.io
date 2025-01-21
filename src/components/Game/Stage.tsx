@@ -27,6 +27,14 @@ interface PlayerCache {
   lastSize: number;
 }
 
+interface NameTagCache {
+  lastPosition: THREE.Vector3;
+  lastBones: number;
+  lastScreenX: number;
+  lastScreenY: number;
+  lastHasWon: boolean;
+}
+
 export class Stage {
   scene: THREE.Scene;
   bones: Bone[] = [];
@@ -50,6 +58,7 @@ export class Stage {
   private spatialGrid: Set<Bone>[][] = [];
   private boneBoundingBoxes = new Map<Bone, THREE.Box3>();
   private playerCache: WeakMap<Character, PlayerCache> = new WeakMap();
+  private nameTagCache: WeakMap<Character, NameTagCache> = new WeakMap();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -528,6 +537,80 @@ export class Stage {
     if (container) {
       container.appendChild(nameTag);
       this.nameTags[character.state.name] = nameTag;
+      
+      // Initialize cache for this character
+      this.nameTagCache.set(character, {
+        lastPosition: new THREE.Vector3(
+          character.state.position.x,
+          character.state.position.y,
+          character.state.position.z
+        ),
+        lastBones: character.state.bones,
+        lastScreenX: 0,
+        lastScreenY: 0,
+        lastHasWon: character.state.hasWon
+      });
+    }
+  }
+
+  private updateNameTags(camera: THREE.Camera) {
+    const tempVector = new THREE.Vector3();
+    
+    for (const player of this.players) {
+      const nameTag = this.nameTags[player.state.name];
+      if (!nameTag) continue;
+
+      let cache = this.nameTagCache.get(player);
+      if (!cache) {
+        // Initialize cache if it doesn't exist
+        cache = {
+          lastPosition: new THREE.Vector3(
+            player.state.position.x,
+            player.state.position.y,
+            player.state.position.z
+          ),
+          lastBones: player.state.bones,
+          lastScreenX: 0,
+          lastScreenY: 0,
+          lastHasWon: player.state.hasWon
+        };
+        this.nameTagCache.set(player, cache);
+      }
+
+      // Get current world position
+      tempVector.set(
+        player.state.position.x,
+        player.state.position.y + 1.5 + player.state.size,
+        player.state.position.z
+      );
+      tempVector.project(camera);
+
+      // Calculate screen coordinates
+      const x = (tempVector.x * 0.5 + 0.5) * window.innerWidth;
+      const y = (-tempVector.y * 0.5 + 0.5) * window.innerHeight;
+
+      // Check if position has changed significantly (using small threshold for floating point comparison)
+      const positionChanged = !cache.lastPosition.equals(tempVector) ||
+        Math.abs(cache.lastScreenX - x) > 0.1 ||
+        Math.abs(cache.lastScreenY - y) > 0.1;
+
+      // Check if other properties have changed
+      const bonesChanged = cache.lastBones !== player.state.bones;
+      const winStateChanged = cache.lastHasWon !== player.state.hasWon;
+
+      // Only update DOM if necessary
+      if (positionChanged) {
+        nameTag.style.transform = `translate(${x}px, ${y}px)`;
+        cache.lastScreenX = x;
+        cache.lastScreenY = y;
+        cache.lastPosition.copy(tempVector);
+      }
+
+      if (bonesChanged || winStateChanged) {
+        nameTag.textContent = `${player.state.name} (${player.state.bones}${player.state.hasWon ? ' - WINNER!' : ''})`;
+        cache.lastBones = player.state.bones;
+        cache.lastHasWon = player.state.hasWon;
+      }
     }
   }
 
@@ -1205,25 +1288,8 @@ export class Stage {
       }, this.RESPAWN_DELAY * 1000);
     }
 
-    // Update nametags with cached world positions
-    const tempVector = new THREE.Vector3();
-    for (const player of this.players) {
-      const nameTag = this.nameTags[player.state.name];
-      if (nameTag) {
-        tempVector.set(
-          player.state.position.x,
-          player.state.position.y + 1.5 + player.state.size,
-          player.state.position.z
-        );
-        tempVector.project(camera);
-
-        const x = (tempVector.x * 0.5 + 0.5) * window.innerWidth;
-        const y = (-tempVector.y * 0.5 + 0.5) * window.innerHeight;
-
-        nameTag.style.transform = `translate(${x}px, ${y}px)`;
-        nameTag.textContent = `${player.state.name} (${player.state.bones}${player.state.hasWon ? ' - WINNER!' : ''})`;
-      }
-    }
+    // Replace the existing nametag update code with the new optimized version
+    this.updateNameTags(camera);
 
     // Optimized collision detection between players using cached bounding boxes
     for (const attacker of this.players) {
