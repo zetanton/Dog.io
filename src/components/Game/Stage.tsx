@@ -11,6 +11,7 @@ interface Bone {
   collected: boolean;
   timestamp: number;
   lifespan?: number; // Optional lifespan in milliseconds
+  boundingBox?: THREE.Box3; // Add cached bounding box
 }
 
 interface DroppingBone extends Bone {
@@ -18,6 +19,12 @@ interface DroppingBone extends Bone {
   rotationSpeed: THREE.Vector3;
   dropTimer: number;
   collectionDelay?: number;
+}
+
+interface PlayerCache {
+  boundingBox: THREE.Box3;
+  lastPosition: THREE.Vector3;
+  lastSize: number;
 }
 
 export class Stage {
@@ -42,7 +49,7 @@ export class Stage {
   private readonly GRID_SIZE = 10; // Number of cells in each dimension
   private spatialGrid: Set<Bone>[][] = [];
   private boneBoundingBoxes = new Map<Bone, THREE.Box3>();
-  private playerBoundingBoxes = new Map<Character, THREE.Box3>();
+  private playerCache: WeakMap<Character, PlayerCache> = new WeakMap();
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -724,13 +731,13 @@ export class Stage {
     const { x, z } = this.getGridCoordinates(bone.position);
     this.spatialGrid[x][z].add(bone);
 
-    // Update bounding box
-    let box = this.boneBoundingBoxes.get(bone);
-    if (!box) {
-      box = new THREE.Box3();
-      this.boneBoundingBoxes.set(bone, box);
+    // Only update bounding box if position has changed
+    if (!bone.position.equals(bone.lastPosition)) {
+      if (!bone.boundingBox) {
+        bone.boundingBox = new THREE.Box3();
+      }
+      bone.boundingBox.setFromObject(bone.mesh);
     }
-    box.setFromObject(bone.mesh);
 
     // Update lastPosition
     bone.lastPosition.copy(bone.position);
@@ -759,6 +766,53 @@ export class Stage {
     return nearbyBones;
   }
 
+  private updatePlayerBoundingBox(player: Character): THREE.Box3 {
+    let cache = this.playerCache.get(player);
+    const currentPosition = new THREE.Vector3(
+      player.state.position.x,
+      player.state.position.y,
+      player.state.position.z
+    );
+    
+    // Check if we need to create or update the cache
+    if (!cache || 
+        !cache.lastPosition.equals(currentPosition) || 
+        cache.lastSize !== player.state.size) {
+      
+      // Create new cache if it doesn't exist
+      if (!cache) {
+        cache = {
+          boundingBox: new THREE.Box3(),
+          lastPosition: currentPosition.clone(),
+          lastSize: player.state.size
+        };
+        this.playerCache.set(player, cache);
+      }
+
+      // Update the bounding box with new dimensions
+      const bodyWidth = 0.8 * player.state.size;
+      const bodyHeight = 0.6 * player.state.size;
+      const bodyLength = 1.2 * player.state.size;
+      
+      cache.boundingBox.min.set(
+        currentPosition.x - bodyWidth/2,
+        currentPosition.y,
+        currentPosition.z - bodyLength/2
+      );
+      cache.boundingBox.max.set(
+        currentPosition.x + bodyWidth/2,
+        currentPosition.y + bodyHeight,
+        currentPosition.z + bodyLength/2
+      );
+
+      // Update cache values
+      cache.lastPosition.copy(currentPosition);
+      cache.lastSize = player.state.size;
+    }
+
+    return cache.boundingBox;
+  }
+
   private updateBones(deltaTime: number) {
     // Update spatial grid for all bones
     [...this.bones, ...this.droppingBones].forEach(bone => {
@@ -771,18 +825,15 @@ export class Stage {
         if (bone.lifespan) {
           const timeLeft = bone.lifespan - (Date.now() - bone.timestamp);
           
-          // Start blinking in the last 3 seconds
           if (timeLeft <= 3000) {
             const mesh = bone.mesh.children[0] as THREE.Mesh;
             const material = mesh.material as THREE.MeshPhongMaterial;
             if (material) {
-              // Blink faster as time runs out
               const blinkSpeed = Math.max(100, timeLeft / 10);
               const shouldBeVisible = Math.floor(Date.now() / blinkSpeed) % 2 === 0;
               material.visible = shouldBeVisible;
             }
 
-            // Mark as uncollectible during blink phase
             bone.collected = true;
             this.cleanupBone(bone);
           }
@@ -790,38 +841,10 @@ export class Stage {
       }
     });
 
-    // Update player bounding boxes with more precise collision areas
+    // Update player bounding boxes only when needed
     for (const player of this.players) {
       if (!player.state.isDying) {
-        let box = this.playerBoundingBoxes.get(player);
-        if (!box) {
-          box = new THREE.Box3();
-          this.playerBoundingBoxes.set(player, box);
-        }
-        
-        // Create a more precise bounding box for the dog model
-        // Use a smaller box that better matches the dog's actual body
-        const dogPosition = new THREE.Vector3(
-          player.state.position.x,
-          player.state.position.y,
-          player.state.position.z
-        );
-        
-        // Calculate a more precise box size based on the dog's actual model proportions
-        const bodyWidth = 0.8 * player.state.size;  // Reduced from full size
-        const bodyHeight = 0.6 * player.state.size; // Lower height to match body
-        const bodyLength = 1.2 * player.state.size; // Slightly longer for body
-        
-        box.min.set(
-          dogPosition.x - bodyWidth/2,
-          dogPosition.y,
-          dogPosition.z - bodyLength/2
-        );
-        box.max.set(
-          dogPosition.x + bodyWidth/2,
-          dogPosition.y + bodyHeight,
-          dogPosition.z + bodyLength/2
-        );
+        this.updatePlayerBoundingBox(player);
       }
     }
 
@@ -912,10 +935,10 @@ export class Stage {
     }
     this.droppingBones = remainingBones;
 
-    // Optimized bone collection using spatial partitioning and precise collision
+    // Use cached bounding boxes for collision detection
     for (const player of this.players) {
       if (!player.state.isDying && !player.state.isHit && player.state.knockbackTime <= 0) {
-        const playerBox = this.playerBoundingBoxes.get(player);
+        const playerBox = this.updatePlayerBoundingBox(player);
         if (!playerBox) continue;
 
         const nearbyBones = this.getNearbyBones(new THREE.Vector3(
@@ -925,18 +948,15 @@ export class Stage {
         ));
 
         for (const bone of nearbyBones) {
-          // Additional validation to prevent erroneous collections
           if (!bone.collected && 
               bone.mesh && 
               bone.mesh.id && 
               this.scene.getObjectById(bone.mesh.id) && 
               (!('collectionDelay' in bone) || ((bone as DroppingBone).collectionDelay ?? 0) <= 0)) {
             
-            // Create a sphere for the bone with a small radius
-            const boneRadius = 0.3; // Smaller, more precise radius for bones
+            const boneRadius = 0.3;
             const bonePosition = bone.mesh.position;
             
-            // Check if the bone's sphere intersects with the dog's precise bounding box
             const sphereIntersectsBox = (
               bonePosition.x + boneRadius >= playerBox.min.x &&
               bonePosition.x - boneRadius <= playerBox.max.x &&
@@ -947,16 +967,14 @@ export class Stage {
             );
 
             if (sphereIntersectsBox) {
-              // Mark as collected before processing to prevent double collection
               bone.collected = true;
               this.cleanupBone(bone);
               player.collectBone();
 
-              // Check for win condition at exactly 100 bones
               if (player.state.bones >= 100) {
-                player.state.bones = 100; // Cap at exactly 100
+                player.state.bones = 100;
                 player.state.hasWon = true;
-                player.updateDogPosition(); // Update size
+                player.updateDogPosition();
                 console.log(`Player ${player.state.name} has won with 100 bones!`);
               }
             }
