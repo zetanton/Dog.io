@@ -338,8 +338,99 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) =
           <PowerCooldown
             isOnCooldown={hydrantCooldown < 1}
             cooldownProgress={hydrantCooldown}
-          />
+          >
+            <svg
+              className={`w-8 h-8 ${hydrantCooldown < 1 ? 'opacity-50' : 'opacity-100'} transition-opacity duration-200`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              {/* Main body */}
+              <path
+                className="text-red-500"
+                fill="currentColor"
+                d="M8 6h8v12H8z"
+              />
+              {/* Top cap */}
+              <path
+                className="text-red-500"
+                fill="currentColor"
+                d="M7 4h10v2H7z"
+              />
+              {/* Bottom base */}
+              <path
+                className="text-red-500"
+                fill="currentColor"
+                d="M6 18h12v2H6z"
+              />
+              {/* Side nozzles */}
+              <path
+                className="text-red-500"
+                fill="currentColor"
+                d="M4 10h4v1H4zM16 10h4v1h-4z"
+              />
+              {/* Center bolt/cap details */}
+              <circle
+                className="text-red-700"
+                fill="currentColor"
+                cx="12"
+                cy="12"
+                r="1.5"
+              />
+            </svg>
+          </PowerCooldown>
           <div className="text-white text-center text-sm mt-1">H</div>
+        </div>
+        <div className="bg-black bg-opacity-50 p-2 rounded-lg backdrop-blur-sm">
+          <PowerCooldown
+            isOnCooldown={Boolean(gameStateRef.current?.player?.state.zoomiesCooldown)}
+            cooldownProgress={gameStateRef.current?.player ? 
+              1 - ((gameStateRef.current.player.state.zoomiesCooldown || 0) / gameStateRef.current.player.ZOOMIES_COOLDOWN) 
+              : 1
+            }
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" 
+              className={`w-8 h-8 ${gameStateRef.current?.player?.state.zoomiesCooldown ? 'opacity-50' : 'opacity-100'} transition-opacity duration-200`} 
+              viewBox="0 0 24 24" 
+              fill="currentColor"
+            >
+              <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </PowerCooldown>
+          <div className="text-white text-center text-sm mt-1">Z</div>
+        </div>
+        <div className="bg-black bg-opacity-50 p-2 rounded-lg backdrop-blur-sm">
+          <PowerCooldown
+            isOnCooldown={Boolean(gameStateRef.current?.player?.state.markingCooldown)}
+            cooldownProgress={gameStateRef.current?.player ? 
+              1 - ((gameStateRef.current.player.state.markingCooldown || 0) / gameStateRef.current.player.MARKING_COOLDOWN) 
+              : 1
+            }
+          >
+            <svg
+              className={`w-8 h-8 ${gameStateRef.current?.player?.state.markingCooldown ? 'opacity-50' : 'opacity-100'} transition-opacity duration-200`}
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              {/* Water drop */}
+              <path
+                className="text-yellow-300"
+                fill="currentColor"
+                d="M12 4L17 12C19 15 17 19 12 19C7 19 5 15 7 12L12 4Z"
+              />
+              {/* Highlight */}
+              <path
+                className="text-yellow-100"
+                fill="currentColor"
+                fillOpacity="0.5"
+                d="M12 4L10 7C12 7 14 8 14 10C14 12 12 13 12 13C14 13 16 11 16 9L12 4Z"
+              />
+            </svg>
+          </PowerCooldown>
+          <div className="text-white text-center text-sm mt-1">M</div>
         </div>
       </div>
 

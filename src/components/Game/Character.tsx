@@ -29,6 +29,14 @@ interface CharacterState {
   isJumping: boolean;
   jumpVelocity: number;
   barkCooldown: number;
+  isZooming: boolean;
+  zoomiesCooldown: number;
+  isMarking: boolean;
+  markingCooldown: number;
+  markingLegSide?: 'left' | 'right';
+  markingRadius: number;
+  markingPosition?: THREE.Vector3;
+  markingAnimationTime: number;
 }
 
 export class Character {
@@ -39,6 +47,7 @@ export class Character {
   headGroup: THREE.Group = new THREE.Group();
   legs: THREE.Mesh[] = [];
   tail: THREE.Mesh = new THREE.Mesh();
+  territoryCircle?: THREE.Mesh;
   readonly MOVE_SPEED = 0.08;
   protected readonly ROTATION_SPEED = 0.1;
   readonly BITE_DURATION = 0.25;
@@ -58,6 +67,15 @@ export class Character {
   readonly GROUND_LEVEL = 0.5;
   protected readonly PLATFORM_LANDING_BUFFER = 0.3;
   readonly BARK_COOLDOWN = 2;
+  readonly ZOOMIES_SPEED_MULTIPLIER = 3;
+  readonly ZOOMIES_DURATION = 3; // seconds
+  readonly ZOOMIES_COOLDOWN = 10; // seconds
+  readonly MARKING_DURATION = 5; // seconds
+  readonly MARKING_COOLDOWN = 10; // seconds
+  readonly MARKING_RADIUS = 15;
+  readonly MARKING_EXPAND_DURATION = 1; // seconds to reach full radius
+  readonly MARKING_PUSH_FORCE = 0.5;
+  readonly MARKING_ANIMATION_DURATION = 1; // seconds for leg lift animation
   private aiController: AIController | null = null;
 
   static readonly DOG_COLORS = [
@@ -106,6 +124,14 @@ export class Character {
       isJumping: false,
       jumpVelocity: 0,
       barkCooldown: 0,
+      isZooming: false,
+      zoomiesCooldown: 0,
+      isMarking: false,
+      markingCooldown: 0,
+      markingLegSide: undefined,
+      markingRadius: 0,
+      markingPosition: undefined,
+      markingAnimationTime: 0,
     };
 
     this.dog = this.createDog();
@@ -416,6 +442,74 @@ export class Character {
     return { collision: hasCollision, groundHeight: highestCollision };
   }
 
+  private animateMarking(deltaTime: number) {
+    // Randomly choose which leg to lift (if not already chosen)
+    if (!this.state.markingLegSide) {
+      this.state.markingLegSide = Math.random() < 0.5 ? 'left' : 'right';
+    }
+
+    // Update animation time
+    this.state.markingAnimationTime += deltaTime;
+    
+    // Calculate animation progress (0 to 1)
+    const animationProgress = Math.min(1, this.state.markingAnimationTime / this.MARKING_ANIMATION_DURATION);
+    
+    if (this.state.markingAnimationTime <= this.MARKING_ANIMATION_DURATION) {
+      // Smooth leg lift animation using sine for natural movement
+      const legLiftAngle = (Math.PI / 2.5) * Math.sin(animationProgress * Math.PI);
+      
+      // Tilt body in opposite direction of lifted leg
+      const bodyTiltAngle = (Math.PI / 8) * Math.sin(animationProgress * Math.PI); // Less tilt than leg
+      
+      // Apply leg lift
+      const legIndex = this.state.markingLegSide === 'left' ? 3 : 2;
+      if (this.legs[legIndex]) {
+        this.legs[legIndex].rotation.z = legLiftAngle;
+      }
+      
+      // Apply body tilt (opposite direction of leg lift)
+      const tiltDirection = this.state.markingLegSide === 'left' ? -1 : 1;
+      this.bodyGroup.rotation.z = bodyTiltAngle * tiltDirection;
+      
+      // Adjust other legs for stability
+      const frontLegIndex = this.state.markingLegSide === 'left' ? 1 : 0;
+      const otherBackLegIndex = this.state.markingLegSide === 'left' ? 2 : 3;
+      
+      // Front leg on lifting side bends slightly
+      if (this.legs[frontLegIndex]) {
+        this.legs[frontLegIndex].rotation.z = -bodyTiltAngle * 0.5;
+      }
+      
+      // Back leg plants firmly
+      if (this.legs[otherBackLegIndex]) {
+        this.legs[otherBackLegIndex].rotation.z = -bodyTiltAngle * 0.7;
+      }
+    }
+
+    // Start territory effect after animation completes
+    if (this.state.markingAnimationTime >= this.MARKING_ANIMATION_DURATION && !this.state.markingPosition) {
+      this.state.markingPosition = new THREE.Vector3(
+        this.state.position.x,
+        this.state.position.y,
+        this.state.position.z
+      );
+    }
+  }
+
+  private createTerritoryCircle(): THREE.Mesh {
+    const geometry = new THREE.CircleGeometry(1, 32);
+    const material = new THREE.MeshBasicMaterial({
+      color: 0xFFEB3B,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.DoubleSide
+    });
+    const circle = new THREE.Mesh(geometry, material);
+    circle.rotation.x = -Math.PI / 2; // Lay flat on the ground
+    circle.position.y = 0.1; // Slightly above ground to avoid z-fighting
+    return circle;
+  }
+
   update(
     keys: { [key: string]: boolean }, 
     deltaTime: number, 
@@ -428,6 +522,16 @@ export class Character {
     // Update bark cooldown
     if (this.state.barkCooldown > 0) {
       this.state.barkCooldown = Math.max(0, this.state.barkCooldown - deltaTime);
+    }
+
+    // Update zoomies cooldown
+    if (this.state.zoomiesCooldown > 0) {
+      this.state.zoomiesCooldown = Math.max(0, this.state.zoomiesCooldown - deltaTime);
+    }
+
+    // Update marking cooldown
+    if (this.state.markingCooldown > 0) {
+      this.state.markingCooldown = Math.max(0, this.state.markingCooldown - deltaTime);
     }
 
     // Handle death animation
@@ -451,144 +555,278 @@ export class Character {
       }
     }
 
-    if (this.isAI) {
-      this.aiController?.update(deltaTime, collidables, collidableBoxes, allPlayers);
-    } else {
-      // Handle keyboard input for player character
-      const moveDirection = new THREE.Vector3();
-
-      if (keys['w'] || keys['ArrowUp']) {
-        moveDirection.z -= 1;
-      }
-      if (keys['s'] || keys['ArrowDown']) {
-        moveDirection.z += 1;
-      }
-      if (keys['a'] || keys['ArrowLeft']) {
-        moveDirection.x -= 1;
-      }
-      if (keys['d'] || keys['ArrowRight']) {
-        moveDirection.x += 1;
-      }
-      if (keys[' '] && !this.state.isJumping) {
-        this.state.isJumping = true;
-        this.state.jumpVelocity = this.JUMP_FORCE;
-      }
-      if (keys['r'] && this.state.barkCooldown <= 0) {
-        AudioManager.getInstance().playBarkSound();
-        this.state.barkCooldown = this.BARK_COOLDOWN;
-      }
-
-      // Update movement and facing direction
-      if (moveDirection.length() > 0) {
-        this.state.isMoving = true;
-        // Immediately face movement direction
-        this.state.rotation = Math.atan2(moveDirection.x, moveDirection.z) + Math.PI;
-        
-        // Calculate new position
-        const moveSpeed = this.MOVE_SPEED * (1.5 / this.state.size);
-        const newPosition = new THREE.Vector3(
-          this.state.position.x + moveDirection.x * moveSpeed,
-          this.state.position.y,
-          this.state.position.z + moveDirection.z * moveSpeed
-        );
-
-        // Only update position if there's no collision
-        if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
-          this.state.position.x = newPosition.x;
-          this.state.position.z = newPosition.z;
-        } else {
-          this.state.isMoving = false; // Stop moving animation if we hit something
-        }
-      } else {
-        this.state.isMoving = false;
-      }
-
-      // Arrow keys for direct movement in faced direction
-      if (keys['ArrowLeft']) {
-        this.state.rotation += this.ROTATION_SPEED;
-      }
-      if (keys['ArrowRight']) {
-        this.state.rotation -= this.ROTATION_SPEED;
-      }
-      if (keys['ArrowUp']) {
-        const moveSpeed = this.MOVE_SPEED * (1.5 / this.state.size);
-        const newPosition = new THREE.Vector3(
-          this.state.position.x + Math.sin(this.state.rotation) * moveSpeed,
-          this.state.position.y,
-          this.state.position.z + Math.cos(this.state.rotation) * moveSpeed
-        );
-        
-        if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
-          this.state.position.x = newPosition.x;
-          this.state.position.z = newPosition.z;
-          this.state.isMoving = true;
-        } else {
-          this.state.isMoving = false; // Stop moving animation if we hit something
-        }
-      }
-      if (keys['ArrowDown']) {
-        const moveSpeed = this.MOVE_SPEED * (1.8 / this.state.size);
-        const newPosition = new THREE.Vector3(
-          this.state.position.x - Math.sin(this.state.rotation) * moveSpeed,
-          this.state.position.y,
-          this.state.position.z - Math.cos(this.state.rotation) * moveSpeed
-        );
-        
-        if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
-          this.state.position.x = newPosition.x;
-          this.state.position.z = newPosition.z;
-          this.state.isMoving = true;
-        } else {
-          this.state.isMoving = false; // Stop moving animation if we hit something
-        }
-      }
-
-      // Check for ground support and apply gravity
-      const currentPos = new THREE.Vector3(
-        this.state.position.x,
-        this.state.position.y,
-        this.state.position.z
-      );
-      const { collision: hasSupport } = this.checkGroundAndPlatformCollision(currentPos, collidables);
-
-      // If no support and not already jumping, start falling
-      if (!hasSupport && !this.state.isJumping && this.state.position.y > this.GROUND_LEVEL) {
-        this.state.isJumping = true;
-        this.state.jumpVelocity = 0; // Start with no upward velocity
-      }
-
-      // Apply gravity and update vertical position if jumping or falling
-      if (this.state.isJumping) {
-        this.state.jumpVelocity -= this.GRAVITY * deltaTime * 60; // Scale gravity by deltaTime for consistent physics
-        const newPosition = new THREE.Vector3(
+    // Handle marking animation and effects
+    if (this.state.isMarking) {
+      this.animateMarking(deltaTime);
+      
+      // Set marking position when starting
+      if (!this.state.markingPosition) {
+        this.state.markingPosition = new THREE.Vector3(
           this.state.position.x,
-          this.state.position.y + this.state.jumpVelocity,
+          this.state.position.y,
           this.state.position.z
         );
 
-        const { collision, groundHeight } = this.checkGroundAndPlatformCollision(newPosition, collidables);
+        // Create territory circle if it doesn't exist
+        if (!this.territoryCircle) {
+          this.territoryCircle = this.createTerritoryCircle();
+          this.dog.parent?.add(this.territoryCircle);
+        }
 
-        if (this.state.jumpVelocity < 0 && (collision || newPosition.y <= groundHeight)) {
-          // Land on platform or ground
-          this.state.position.y = groundHeight;
-          this.state.isJumping = false;
-          this.state.jumpVelocity = 0;
-        } else {
-          // Continue jumping/falling
-          this.state.position.y = newPosition.y;
+        // Position the circle
+        if (this.territoryCircle) {
+          this.territoryCircle.position.set(
+            this.state.markingPosition.x,
+            0.1,
+            this.state.markingPosition.z
+          );
         }
       }
 
-      // Biting
-      if (keys['b'] && !this.state.isBiting && this.state.knockbackTime <= 0) {
-        this.state.isBiting = true;
-        this.state.biteTimer = this.BITE_DURATION;
+      // Expand radius during the first second
+      if (this.state.markingRadius < this.MARKING_RADIUS) {
+        this.state.markingRadius += (this.MARKING_RADIUS / this.MARKING_EXPAND_DURATION) * deltaTime;
+        
+        // Scale the territory circle
+        if (this.territoryCircle) {
+          const currentScale = Math.min(this.MARKING_RADIUS, this.state.markingRadius);
+          this.territoryCircle.scale.set(
+            currentScale,
+            currentScale,
+            currentScale
+          );
+        }
       }
 
-      // Keep within bounds
-      const BOUND = 45;
-      this.state.position.x = Math.max(-BOUND, Math.min(BOUND, this.state.position.x));
-      this.state.position.z = Math.max(-BOUND, Math.min(BOUND, this.state.position.z));
+      // Update circle opacity based on remaining time
+      if (this.territoryCircle) {
+        const material = this.territoryCircle.material as THREE.MeshBasicMaterial;
+        const timeLeft = this.MARKING_DURATION - (this.MARKING_DURATION - this.state.markingCooldown);
+        material.opacity = 0.3 * (timeLeft / this.MARKING_DURATION);
+      }
+
+      // Push away other dogs
+      if (allPlayers && this.state.markingPosition) {
+        allPlayers.forEach(otherDog => {
+          if (otherDog !== this) {
+            const otherPos = new THREE.Vector3(
+              otherDog.state.position.x,
+              otherDog.state.position.y,
+              otherDog.state.position.z
+            );
+            const distance = new THREE.Vector3().subVectors(otherPos, this.state.markingPosition!);
+            distance.y = 0; // Keep push force horizontal
+            const distanceLength = distance.length();
+
+            if (distanceLength < this.state.markingRadius) {
+              // Calculate push direction and force
+              const pushDirection = distance.normalize();
+              const pushForce = (this.state.markingRadius - distanceLength) / this.state.markingRadius;
+              const pushVector = pushDirection.multiplyScalar(this.MARKING_PUSH_FORCE * pushForce);
+              
+              // Apply push force
+              otherDog.state.position.x += pushVector.x;
+              otherDog.state.position.z += pushVector.z;
+            }
+          }
+        });
+      }
+    } else {
+      // Remove territory circle when not marking
+      if (this.territoryCircle) {
+        this.territoryCircle.removeFromParent();
+        this.territoryCircle = undefined;
+      }
+
+      // Reset marking state when not marking
+      this.state.markingLegSide = undefined;
+      this.state.markingRadius = 0;
+      this.state.markingPosition = undefined;
+      
+      // Reset all leg rotations and body tilt
+      this.bodyGroup.rotation.z = 0;
+      this.legs.forEach(leg => {
+        leg.rotation.z = 0;
+      });
+    }
+
+    if (this.isAI) {
+      this.aiController?.update(deltaTime, collidables, collidableBoxes, allPlayers);
+    } else {
+      // Only process movement if not in marking animation
+      const canMove = !this.state.isMarking || this.state.markingAnimationTime > this.MARKING_ANIMATION_DURATION;
+      
+      if (canMove) {
+        // Handle keyboard input for player character
+        const moveDirection = new THREE.Vector3();
+
+        if (keys['w'] || keys['ArrowUp']) {
+          moveDirection.z -= 1;
+        }
+        if (keys['s'] || keys['ArrowDown']) {
+          moveDirection.z += 1;
+        }
+        if (keys['a'] || keys['ArrowLeft']) {
+          moveDirection.x -= 1;
+        }
+        if (keys['d'] || keys['ArrowRight']) {
+          moveDirection.x += 1;
+        }
+        if (keys[' '] && !this.state.isJumping) {
+          this.state.isJumping = true;
+          this.state.jumpVelocity = this.JUMP_FORCE;
+        }
+        if (keys['r'] && this.state.barkCooldown <= 0) {
+          AudioManager.getInstance().playBarkSound();
+          this.state.barkCooldown = this.BARK_COOLDOWN;
+        }
+
+        // Handle zoomies activation
+        if (keys['z'] && this.state.zoomiesCooldown === 0 && !this.state.isZooming) {
+          this.state.isZooming = true;
+          this.state.zoomiesCooldown = this.ZOOMIES_COOLDOWN;
+          setTimeout(() => {
+            this.state.isZooming = false;
+          }, this.ZOOMIES_DURATION * 1000);
+        }
+
+        // Handle marking activation
+        if (keys['m'] && this.state.markingCooldown === 0 && !this.state.isMarking) {
+          this.state.isMarking = true;
+          this.state.markingCooldown = this.MARKING_COOLDOWN;
+          this.state.markingAnimationTime = 0;
+          setTimeout(() => {
+            this.state.isMarking = false;
+            // Reset leg positions
+            if (this.legs[2]) this.legs[2].rotation.z = 0;
+            if (this.legs[3]) this.legs[3].rotation.z = 0;
+          }, this.MARKING_DURATION * 1000);
+        }
+
+        // Calculate current move speed
+        const currentMoveSpeed = this.MOVE_SPEED * (
+          this.isAI ? this.AI_MOVE_SPEED_MULTIPLIER : 1
+        ) * (this.state.isZooming ? this.ZOOMIES_SPEED_MULTIPLIER : 1);
+
+        // Update movement and facing direction
+        if (moveDirection.length() > 0) {
+          this.state.isMoving = true;
+          // Immediately face movement direction
+          this.state.rotation = Math.atan2(moveDirection.x, moveDirection.z) + Math.PI;
+          
+          // Calculate new position
+          const newPosition = new THREE.Vector3(
+            this.state.position.x + moveDirection.x * currentMoveSpeed,
+            this.state.position.y,
+            this.state.position.z + moveDirection.z * currentMoveSpeed
+          );
+
+          // Only update position if there's no collision
+          if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
+            this.state.position.x = newPosition.x;
+            this.state.position.z = newPosition.z;
+          } else {
+            this.state.isMoving = false; // Stop moving animation if we hit something
+          }
+        } else {
+          this.state.isMoving = false;
+        }
+
+        // Arrow keys for direct movement in faced direction
+        if (keys['ArrowLeft']) {
+          this.state.rotation += this.ROTATION_SPEED;
+        }
+        if (keys['ArrowRight']) {
+          this.state.rotation -= this.ROTATION_SPEED;
+        }
+        if (keys['ArrowUp']) {
+          const forward = new THREE.Vector3(
+            Math.sin(this.state.rotation),
+            0,
+            Math.cos(this.state.rotation)
+          );
+          const newPosition = new THREE.Vector3(
+            this.state.position.x + forward.x * currentMoveSpeed,
+            this.state.position.y,
+            this.state.position.z + forward.z * currentMoveSpeed
+          );
+          
+          if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
+            this.state.position.x = newPosition.x;
+            this.state.position.z = newPosition.z;
+            this.state.isMoving = true;
+          } else {
+            this.state.isMoving = false; // Stop moving animation if we hit something
+          }
+        }
+        if (keys['ArrowDown']) {
+          const backward = new THREE.Vector3(
+            -Math.sin(this.state.rotation),
+            0,
+            -Math.cos(this.state.rotation)
+          );
+          const newPosition = new THREE.Vector3(
+            this.state.position.x + backward.x * currentMoveSpeed,
+            this.state.position.y,
+            this.state.position.z + backward.z * currentMoveSpeed
+          );
+          
+          if (!this.checkCollision(newPosition, collidables, collidableBoxes)) {
+            this.state.position.x = newPosition.x;
+            this.state.position.z = newPosition.z;
+            this.state.isMoving = true;
+          } else {
+            this.state.isMoving = false; // Stop moving animation if we hit something
+          }
+        }
+
+        // Check for ground support and apply gravity
+        const currentPos = new THREE.Vector3(
+          this.state.position.x,
+          this.state.position.y,
+          this.state.position.z
+        );
+        const { collision: hasSupport } = this.checkGroundAndPlatformCollision(currentPos, collidables);
+
+        // If no support and not already jumping, start falling
+        if (!hasSupport && !this.state.isJumping && this.state.position.y > this.GROUND_LEVEL) {
+          this.state.isJumping = true;
+          this.state.jumpVelocity = 0; // Start with no upward velocity
+        }
+
+        // Apply gravity and update vertical position if jumping or falling
+        if (this.state.isJumping) {
+          this.state.jumpVelocity -= this.GRAVITY * deltaTime * 60; // Scale gravity by deltaTime for consistent physics
+          const newPosition = new THREE.Vector3(
+            this.state.position.x,
+            this.state.position.y + this.state.jumpVelocity,
+            this.state.position.z
+          );
+
+          const { collision, groundHeight } = this.checkGroundAndPlatformCollision(newPosition, collidables);
+
+          if (this.state.jumpVelocity < 0 && (collision || newPosition.y <= groundHeight)) {
+            // Land on platform or ground
+            this.state.position.y = groundHeight;
+            this.state.isJumping = false;
+            this.state.jumpVelocity = 0;
+          } else {
+            // Continue jumping/falling
+            this.state.position.y = newPosition.y;
+          }
+        }
+
+        // Biting
+        if (keys['b'] && !this.state.isBiting && this.state.knockbackTime <= 0) {
+          this.state.isBiting = true;
+          this.state.biteTimer = this.BITE_DURATION;
+        }
+
+        // Keep within bounds
+        const BOUND = 45;
+        this.state.position.x = Math.max(-BOUND, Math.min(BOUND, this.state.position.x));
+        this.state.position.z = Math.max(-BOUND, Math.min(BOUND, this.state.position.z));
+      }
     }
 
     // Update bite timer

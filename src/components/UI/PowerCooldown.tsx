@@ -3,11 +3,13 @@ import React from 'react';
 interface PowerCooldownProps {
     isOnCooldown: boolean;
     cooldownProgress: number; // 0 to 1
+    children?: React.ReactNode;
 }
 
 const PowerCooldown: React.FC<PowerCooldownProps> = ({ 
     isOnCooldown, 
-    cooldownProgress
+    cooldownProgress,
+    children
 }) => {
     // Calculate the circumference of the circle
     const radius = 16;
@@ -47,48 +49,10 @@ const PowerCooldown: React.FC<PowerCooldownProps> = ({
                     />
                 )}
             </svg>
-
-            {/* Hydrant Icon */}
-            <svg
-                className={`absolute inset-0 w-8 h-8 m-auto ${isOnCooldown ? 'opacity-50' : 'opacity-100'} transition-opacity duration-200`}
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-            >
-                {/* Main body */}
-                <path
-                    className="text-red-500"
-                    fill="currentColor"
-                    d="M8 6h8v12H8z"
-                />
-                {/* Top cap */}
-                <path
-                    className="text-red-500"
-                    fill="currentColor"
-                    d="M7 4h10v2H7z"
-                />
-                {/* Bottom base */}
-                <path
-                    className="text-red-500"
-                    fill="currentColor"
-                    d="M6 18h12v2H6z"
-                />
-                {/* Side nozzles */}
-                <path
-                    className="text-red-500"
-                    fill="currentColor"
-                    d="M4 10h4v1H4zM16 10h4v1h-4z"
-                />
-                {/* Center bolt/cap details */}
-                <circle
-                    className="text-red-700"
-                    fill="currentColor"
-                    cx="12"
-                    cy="12"
-                    r="1.5"
-                />
-            </svg>
+            {/* Icon container */}
+            <div className="absolute inset-0 flex items-center justify-center text-white">
+                {children}
+            </div>
         </div>
     );
 };
