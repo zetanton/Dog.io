@@ -603,9 +603,25 @@ export class Stage {
       );
       tempVector.project(camera);
 
+      // Hide nametag if behind camera or too far away
+      if (tempVector.z > 1) {
+        nameTag.style.display = 'none';
+        continue;
+      }
+
       // Calculate screen coordinates
       const x = (tempVector.x * 0.5 + 0.5) * window.innerWidth;
       const y = (-tempVector.y * 0.5 + 0.5) * window.innerHeight;
+
+      // Hide if outside screen bounds with some padding
+      if (x < -100 || x > window.innerWidth + 100 || 
+          y < -100 || y > window.innerHeight + 100) {
+        nameTag.style.display = 'none';
+        continue;
+      }
+
+      // Show nametag if it was previously hidden
+      nameTag.style.display = '';
 
       // Check if position has changed significantly (using small threshold for floating point comparison)
       const positionChanged = !cache.lastPosition.equals(tempVector) ||

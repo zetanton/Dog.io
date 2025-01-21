@@ -418,7 +418,7 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) =
             >
               {/* Water drop */}
               <path
-                className="text-yellow-300"
+                className="text-yellow-400"
                 fill="currentColor"
                 d="M12 4L17 12C19 15 17 19 12 19C7 19 5 15 7 12L12 4Z"
               />
@@ -426,8 +426,8 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) =
               <path
                 className="text-yellow-100"
                 fill="currentColor"
-                fillOpacity="0.5"
-                d="M12 4L10 7C12 7 14 8 14 10C14 12 12 13 12 13C14 13 16 11 16 9L12 4Z"
+                fillOpacity="0.6"
+                d="M10 14C11 14 12 15 12 16C12 17 11 17 10 16C9 15 9 14 10 14Z"
               />
             </svg>
           </PowerCooldown>
