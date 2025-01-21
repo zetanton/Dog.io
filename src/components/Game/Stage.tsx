@@ -640,7 +640,7 @@ export class Stage {
     const bone = this.createBone();
     bone.mesh.position.copy(position);
     bone.mesh.position.y = this.BONE_INITIAL_Y;
-    bone.lifespan = 10000; // 10 seconds lifespan for explosion bones
+    bone.lifespan = 12000; // 12 seconds total: 10 seconds visible + 2 seconds blinking
     
     // Ensure the bone is properly tracked in the scene
     if (!this.scene.getObjectById(bone.mesh.id)) {
@@ -926,17 +926,41 @@ export class Stage {
         if (bone.lifespan) {
           const timeLeft = bone.lifespan - (Date.now() - bone.timestamp);
           
-          if (timeLeft <= 3000) {
-            const mesh = bone.mesh.children[0] as THREE.Mesh;
-            const material = mesh.material as THREE.MeshPhongMaterial;
-            if (material) {
-              const blinkSpeed = Math.max(100, timeLeft / 10);
-              const shouldBeVisible = Math.floor(Date.now() / blinkSpeed) % 2 === 0;
-              material.visible = shouldBeVisible;
-            }
+          // Start blinking in the last 2 seconds
+          if (timeLeft <= 2000) {
+            // Get all meshes in the bone group
+            bone.mesh.traverse((child) => {
+              if (child instanceof THREE.Mesh) {
+                const material = child.material as THREE.MeshPhongMaterial;
+                if (material) {
+                  // Blink faster as time runs out
+                  const blinkSpeed = Math.max(50, timeLeft / 10); // Increased blink frequency
+                  const shouldBeVisible = Math.floor(Date.now() / blinkSpeed) % 2 === 0;
+                  // Make sure all parts of the bone blink together
+                  material.visible = shouldBeVisible;
+                  material.transparent = true;
+                  material.opacity = shouldBeVisible ? 1 : 0;
+                }
+              }
+            });
 
-            bone.collected = true;
-            this.cleanupBone(bone);
+            // Only mark as collected when time is completely up
+            if (timeLeft <= 0) {
+              bone.collected = true;
+              this.cleanupBone(bone);
+            }
+          } else {
+            // Ensure bone is fully visible during the first 10 seconds
+            bone.mesh.traverse((child) => {
+              if (child instanceof THREE.Mesh) {
+                const material = child.material as THREE.MeshPhongMaterial;
+                if (material) {
+                  material.visible = true;
+                  material.transparent = false;
+                  material.opacity = 1;
+                }
+              }
+            });
           }
         }
       }
@@ -1312,17 +1336,52 @@ export class Stage {
 
     // Optimized collision detection between players using cached bounding boxes
     for (const attacker of this.players) {
-      // Only check for bites when the dog is actively biting and not in hit state
+      // Only check for bites when the dog is actively biting
       if (attacker.state.isBiting && attacker.state.biteTimer > 0) {
         const biteBox = attacker.bite();
+        
+        // Expand the bite box slightly to make detection more forgiving
+        biteBox.expandByScalar(1.0);
+
         for (const victim of this.players) {
-          // Only check collision if it's not self, victim isn't dying, and victim isn't in hit state or knockback
+          // Prevent hitting if: self-bite, dying, or currently in hit sequence
           if (attacker !== victim && 
               !victim.state.isDying && 
               !victim.state.isHit && 
               victim.state.knockbackTime <= 0) {
-            const victimBox = playerBoundingBoxes.get(victim);
-            if (victimBox && biteBox.intersectsBox(victimBox)) {
+            
+            const victimBox = this.updatePlayerBoundingBox(victim);
+            if (!victimBox) continue;
+
+            // Calculate distance between attacker and victim for more precise detection
+            const attackerPos = new THREE.Vector3(
+              attacker.state.position.x,
+              attacker.state.position.y,
+              attacker.state.position.z
+            );
+            const victimPos = new THREE.Vector3(
+              victim.state.position.x,
+              victim.state.position.y,
+              victim.state.position.z
+            );
+            const distance = attackerPos.distanceTo(victimPos);
+
+            // Calculate forward vector of attacker
+            const forwardX = -Math.sin(attacker.state.rotation);
+            const forwardZ = -Math.cos(attacker.state.rotation);
+            const forward = new THREE.Vector3(forwardX, 0, forwardZ);
+
+            // Calculate vector to victim
+            const toVictim = new THREE.Vector3()
+              .subVectors(victimPos, attackerPos)
+              .normalize();
+
+            // Check if victim is in front of attacker (dot product > 0)
+            const dotProduct = forward.dot(toVictim);
+
+            // Check both box intersection and distance, and ensure victim is in front
+            const maxBiteDistance = (attacker.state.size + victim.state.size) * 1.2;
+            if ((biteBox.intersectsBox(victimBox) || distance <= maxBiteDistance) && dotProduct > 0.5) {
               this.handleBiteCollision(attacker, victim);
               // Stop checking for more victims and stop attacker's bite
               attacker.state.biteTimer = 0;
@@ -1335,68 +1394,61 @@ export class Stage {
   }
 
   private handleBiteCollision(attacker: Character, victim: Character) {
-    console.log('\n=== BITE COLLISION SEQUENCE START ===');
-    
-    // Play bite sound
+    // Set hit state immediately to prevent multiple hits
+    victim.state.isHit = true;
+    victim.state.hitTimer = 0.5; // Half second hit flash duration
+
+    // Always play bite sound and flash immediately
     AudioManager.getInstance().playBiteSound();
     
-    // Only prevent if victim is dying
+    // Flash the victim's model to indicate hit
+    const victimMesh = victim.dog.children[0] as THREE.Mesh;
+    const victimMaterial = victimMesh.material as THREE.MeshPhongMaterial;
+    if (victimMaterial) {
+      const originalColor = victimMaterial.color.clone();
+      victimMaterial.color.setHex(0xff0000); // Flash red
+      setTimeout(() => {
+        victimMaterial.color.copy(originalColor);
+      }, 100);
+    }
+
+    // Apply knockback immediately
+    victim.applyKnockback(attacker, 7.0);
+
+    // Only prevent bone dropping if victim is dying
     if (victim.state.isDying) {
-      console.log('[Sequence] Victim is dying, ignoring bite');
       return;
     }
 
-    console.log('[Initial State]');
-    console.log(`Attacker: ${attacker.state.name} (Bones: ${attacker.state.bones}, Size: ${attacker.state.size.toFixed(2)})`);
-    console.log(`Victim: ${victim.state.name} (Bones: ${victim.state.bones}, Size: ${victim.state.size.toFixed(2)})`);
+    let droppedBones = 0;
 
-    // Step 1: Handle bone dropping logic
+    // Handle bone dropping logic
     if (victim.state.bones === 0) {
-      console.log('FATAL HIT - Victim has 0 bones');
-      victim.dropAllBones();
+      droppedBones = victim.dropAllBones();
     } else if (attacker.state.bones >= victim.state.bones) {
-      console.log('FATAL HIT - Dog with more bones attacked dog with fewer bones');
-      const droppedBones = victim.state.bones;
-      if (droppedBones > 0) {
-        console.log(`[1.1] Dropping all ${droppedBones} bones`);
-        const actualDroppedBones = victim.dropAllBones();
-        console.log(`[1.2] Actually dropped ${actualDroppedBones} bones`);
-        console.log(`[1.3] Creating bone explosion effect`);
-        // Limit the number of bones that can explode to prevent excessive bone spawning
-        const maxExplosionBones = Math.min(actualDroppedBones, this.MAX_EXPLOSION_BONES);
-        this.createBonePile(victim.state.position, maxExplosionBones, 5);
+      if (victim.state.bones > 0) {
+        droppedBones = victim.dropAllBones();
       } else {
-        console.log('[1.1] Victim has no bones, starting death sequence');
         victim.dropAllBones(); // This will trigger the death animation even with 0 bones
       }
     } else {
-      console.log('PARTIAL HIT - Dog with fewer bones attacked dog with more bones');
       const dropPercentage = 0.25 + Math.random() * 0.15; // Drop 25-40% of bones
       const bonesToDrop = Math.min(Math.ceil(victim.state.bones * dropPercentage), 10); // Cap at 10 bones
-      console.log(`[1.1] Calculated ${bonesToDrop} bones to drop (${(dropPercentage * 100).toFixed(1)}% of ${victim.state.bones})`);
-
       if (bonesToDrop > 0) {
-        console.log('[1.2] Calling dropSomeBones');
-        const actualDroppedBones = victim.dropSomeBones(bonesToDrop);
-        console.log(`[1.3] Actually dropped ${actualDroppedBones} bones`);
-        console.log(`[1.4] Victim now has ${victim.state.bones} bones and size ${victim.state.size.toFixed(2)}`);
-        console.log('[1.5] Creating bone explosion effect');
-        this.createBonePile(victim.state.position, actualDroppedBones, 5);
+        droppedBones = victim.dropSomeBones(bonesToDrop);
       }
     }
 
-    // Step 2: Update nametag with new stats
+    // Create bone explosion if any bones were dropped
+    if (droppedBones > 0) {
+      this.createBonePile(victim.state.position, droppedBones, 5);
+    }
+
+    // Update nametag with new stats
     const nameTag = this.nameTags[victim.state.name];
     if (nameTag) {
       nameTag.textContent = `${victim.state.name} (${victim.state.bones})`;
     }
-
-    // Step 3: Apply knockback and hit effects
-    console.log('\n[Step 3] Applying knockback and hit effects');
-    victim.applyKnockback(attacker, 7.0);
-
-    console.log(`Victim: Bones=${victim.state.bones}, Size=${victim.state.size.toFixed(2)}, IsHit=${victim.state.isHit}, KnockbackTime=${victim.state.knockbackTime}, IsDying=${victim.state.isDying}`);
-    console.log('=== BITE COLLISION SEQUENCE END ===\n');
   }
 
   // Helper method to create bone piles
