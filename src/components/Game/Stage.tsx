@@ -44,13 +44,15 @@ export class Stage {
   collidableObjects: THREE.Object3D[] = [];
   nameTags: { [key: string]: HTMLDivElement } = {};
   private readonly STAGE_SIZE = 100;
-  private readonly TARGET_BONES = 50; // Rename MAX_BONES to TARGET_BONES for clarity
+  private readonly TARGET_BONES = 50;
   private readonly BONE_DROP_DURATION = 0.5;
   private readonly BONE_INITIAL_Y = 1.5;
   private readonly GRAVITY = 9.8;
   private readonly RESPAWN_DELAY = 3.0;
   private bonePool: THREE.Group[] = [];
-  private readonly BONE_POOL_SIZE = 100;
+  private readonly BONE_POOL_SIZE = 200;
+  private readonly MAX_EXPLOSION_BONES = 15;
+  private activeBones = new Set<THREE.Group>();
   private spawnLocations: { position: THREE.Vector3; weight: number }[] = [];
   private totalSpawnWeight: number = 0;
   private readonly CELL_SIZE = 10; // Size of each grid cell
@@ -249,15 +251,30 @@ export class Stage {
       this.scene.add(bone);
       this.bonePool.push(bone);
     }
+    console.log(`Initialized bone pool with ${this.BONE_POOL_SIZE} bones`);
   }
 
   private getBoneFromPool(): THREE.Group | null {
     for (let bone of this.bonePool) {
-      if (!bone.visible) {
+      if (!bone.visible && !this.activeBones.has(bone)) {
         bone.visible = true;
+        this.activeBones.add(bone);
         return bone;
       }
     }
+
+    if (this.activeBones.size >= this.BONE_POOL_SIZE) {
+      console.warn('Bone pool exhausted, recycling oldest bone');
+      const oldestBone = this.activeBones.values().next().value;
+      if (oldestBone) {
+        this.activeBones.delete(oldestBone);
+        oldestBone.visible = true;
+        this.activeBones.add(oldestBone);
+        return oldestBone;
+      }
+    }
+
+    console.error('Could not get bone from pool');
     return null;
   }
 
@@ -265,6 +282,7 @@ export class Stage {
     bone.visible = false;
     bone.position.set(0, 0, 0);
     bone.rotation.set(0, 0, 0);
+    this.activeBones.delete(bone);
   }
 
   private createBoneMesh(): THREE.Group {
@@ -297,7 +315,7 @@ export class Stage {
   private createBone(): Bone {
     const boneGroup = this.getBoneFromPool();
     if (!boneGroup) {
-      console.warn('Bone pool exhausted!');
+      console.error('Failed to get bone from pool');
       return this.createBoneWithNewMesh();
     }
 
@@ -1129,6 +1147,7 @@ export class Stage {
     }
     this.bones = [];
     this.droppingBones = [];
+    this.activeBones.clear();
 
     // Reset all players
     for (const player of this.players) {
@@ -1344,7 +1363,7 @@ export class Stage {
         console.log(`[1.2] Actually dropped ${actualDroppedBones} bones`);
         console.log(`[1.3] Creating bone explosion effect`);
         // Limit the number of bones that can explode to prevent excessive bone spawning
-        const maxExplosionBones = Math.min(actualDroppedBones, 15);
+        const maxExplosionBones = Math.min(actualDroppedBones, this.MAX_EXPLOSION_BONES);
         this.createBonePile(victim.state.position, maxExplosionBones, 5);
       } else {
         console.log('[1.1] Victim has no bones, starting death sequence');
@@ -1382,9 +1401,12 @@ export class Stage {
 
   // Helper method to create bone piles
   private createBonePile(position: { x: number, y: number, z: number }, count: number, baseVelocity: number) {
-    console.log(`[createBonePile] Creating pile of ${count} bones at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
+    // Limit the number of bones to prevent pool exhaustion
+    const actualCount = Math.min(count, this.MAX_EXPLOSION_BONES);
+    console.log(`[createBonePile] Creating pile of ${actualCount} bones at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
+    
+    for (let i = 0; i < actualCount; i++) {
+      const angle = (i / actualCount) * Math.PI * 2;
       const randomRadius = Math.random() * 0.5 + 0.5;
       
       const velocity = new THREE.Vector3(
@@ -1397,8 +1419,10 @@ export class Stage {
         new THREE.Vector3(position.x, position.y, position.z),
         velocity
       );
-      this.droppingBones.push(bone);
+      if (bone) {
+        this.droppingBones.push(bone);
+      }
     }
-    console.log(`[createBonePile] Added ${count} bones to droppingBones array (total: ${this.droppingBones.length})`);
+    console.log(`[createBonePile] Added ${actualCount} bones to droppingBones array (total: ${this.droppingBones.length})`);
   }
 }
