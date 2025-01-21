@@ -323,7 +323,12 @@ export class AIController {
             }
         }
 
-        // Decision making based on state
+        // Get player rankings
+        const sortedPlayers = [...players, this.character].sort((a, b) => b.state.bones - a.state.bones);
+        const ourRank = sortedPlayers.indexOf(this.character);
+        const isBottomFive = ourRank >= sortedPlayers.length - 5;
+
+        // Decision making based on state and rank
         let targetPosition: THREE.Vector3 | null = null;
         let shouldBite = false;
         let isPursuing = false;
@@ -340,7 +345,7 @@ export class AIController {
             shouldBite = revengeTarget.distance < 4;
             isPursuing = true;
         }
-        // New leader targeting logic
+        // Leader targeting logic - maintained for all AIs
         else if (leaderTarget && 
                  ((this.character.state.bones >= this.MINIMUM_SAFE_BONES && leaderTarget.isVulnerable) || 
                   leaderTarget.character.state.bones > this.character.state.bones * 2)) {
@@ -349,73 +354,143 @@ export class AIController {
                 leaderTarget.character.state.position.y,
                 leaderTarget.character.state.position.z
             );
-            // Adjust bite range based on position advantage
             const effectiveDistance = leaderTarget.distance;
             shouldBite = effectiveDistance < (leaderTarget.isVulnerable ? 4 : 3);
             isPursuing = true;
             isSneaking = !leaderTarget.isVulnerable;
         }
-        else if (nearestPlayer && 
-            nearestPlayer.distance < this.FLEE_DISTANCE && 
-            (this.character.state.bones < (nearestPlayer.character.state.bones * 0.8) || // More cautious when smaller
-             (this.character.state.bones > 20 && nearestPlayer.character.state.bones > this.character.state.bones * 0.9))) { // More defensive with many bones
-            const awayVector = new THREE.Vector3(
-                this.character.state.position.x - nearestPlayer.character.state.position.x,
-                0,
-                this.character.state.position.z - nearestPlayer.character.state.position.z
-            ).normalize();
-
-            // Enhanced fleeing behavior - prioritize bones in escape path
-            let bestFleeTarget = null;
-            let bestFleeScore = -1;
-            for (const bone of nearbyBones) {
-                const toBone = new THREE.Vector3(
-                    bone.position.x - this.character.state.position.x,
+        // Modified behavior for bottom 5 AIs - more defensive and focused on bone collection
+        else if (isBottomFive) {
+            if (nearestPlayer && 
+                nearestPlayer.distance < this.FLEE_DISTANCE * 1.2 && // Increased flee distance for bottom 5
+                nearestPlayer.character.state.bones > this.character.state.bones * 0.9) {
+                const awayVector = new THREE.Vector3(
+                    this.character.state.position.x - nearestPlayer.character.state.position.x,
                     0,
-                    bone.position.z - this.character.state.position.z
+                    this.character.state.position.z - nearestPlayer.character.state.position.z
                 ).normalize();
-                
-                const alignmentScore = awayVector.dot(toBone) + 1;
-                const distanceScore = 1 - (bone.distance / this.BONE_DETECTION_RANGE);
-                const score = alignmentScore * distanceScore * 1.5; // Increased score multiplier
-                
-                if (score > bestFleeScore) {
-                    bestFleeScore = score;
-                    bestFleeTarget = bone.position;
+
+                // Enhanced fleeing behavior - prioritize bones in escape path
+                let bestFleeTarget = null;
+                let bestFleeScore = -1;
+                for (const bone of nearbyBones) {
+                    const toBone = new THREE.Vector3(
+                        bone.position.x - this.character.state.position.x,
+                        0,
+                        bone.position.z - this.character.state.position.z
+                    ).normalize();
+                    
+                    const alignmentScore = awayVector.dot(toBone) + 1;
+                    const distanceScore = 1 - (bone.distance / this.BONE_DETECTION_RANGE);
+                    const score = alignmentScore * distanceScore * 2; // Increased score multiplier for bottom 5
+                    
+                    if (score > bestFleeScore) {
+                        bestFleeScore = score;
+                        bestFleeTarget = bone.position;
+                    }
+                }
+
+                if (bestFleeTarget && bestFleeScore > 0.3) { // Lower threshold for bottom 5 to pick up more bones while fleeing
+                    targetPosition = bestFleeTarget;
+                    isHuntingBones = true;
+                } else {
+                    targetPosition = new THREE.Vector3(
+                        this.character.state.position.x + awayVector.x * 25, // Increased flee distance
+                        this.character.state.position.y,
+                        this.character.state.position.z + awayVector.z * 25
+                    );
                 }
             }
-
-            if (bestFleeTarget && bestFleeScore > 0.4) { // Lowered threshold to pick up more bones while fleeing
-                targetPosition = bestFleeTarget;
-                isHuntingBones = true;
-            } else {
+            // Prioritize bone collection for bottom 5
+            else if (nearestBone) {
+                const isSafeToCollect = !nearestPlayer || 
+                                      nearestPlayer.distance > this.CHASE_DISTANCE * 1.2 || 
+                                      this.character.state.bones >= nearestPlayer.character.state.bones * 0.7; // More lenient safety check
+                
+                if (isSafeToCollect) {
+                    targetPosition = nearestBone.position;
+                    isHuntingBones = true;
+                }
+            }
+            // Attack only if we have a clear advantage
+            else if (weakestPlayer && 
+                     this.character.state.bones >= weakestPlayer.character.state.bones * 1.4 && // Require bigger advantage
+                     weakestPlayer.distance < this.CHASE_DISTANCE * 0.8) { // Shorter chase distance
                 targetPosition = new THREE.Vector3(
-                    this.character.state.position.x + awayVector.x * 20, // Increased flee distance
-                    this.character.state.position.y,
-                    this.character.state.position.z + awayVector.z * 20
+                    weakestPlayer.character.state.position.x,
+                    weakestPlayer.character.state.position.y,
+                    weakestPlayer.character.state.position.z
                 );
+                shouldBite = weakestPlayer.distance < 3;
+                isPursuing = true;
             }
         }
-        else if (weakestPlayer && 
-                 (this.character.state.bones >= weakestPlayer.character.state.bones * 1.2 || // More aggressive when significantly bigger
-                  (this.character.state.bones >= 15 && weakestPlayer.character.state.bones < this.character.state.bones * 0.9))) { // Hunt smaller dogs when strong
-            targetPosition = new THREE.Vector3(
-                weakestPlayer.character.state.position.x,
-                weakestPlayer.character.state.position.y,
-                weakestPlayer.character.state.position.z
-            );
-            shouldBite = weakestPlayer.distance < 3.5;
-            isPursuing = true;
-        }
-        else if (nearestBone) {
-            // Prioritize bone collection when we're small or when we can safely grow
-            const isSafeToCollect = !nearestPlayer || 
-                                  nearestPlayer.distance > this.CHASE_DISTANCE || 
-                                  this.character.state.bones >= nearestPlayer.character.state.bones * 0.8;
-            
-            if (isSafeToCollect) {
-                targetPosition = nearestBone.position;
-                isHuntingBones = true;
+        // Original behavior for top players
+        else {
+            // Prioritize bone collection first for top players
+            if (nearestBone) {
+                const isSafeToCollect = !nearestPlayer || 
+                                      nearestPlayer.distance > this.CHASE_DISTANCE * 0.8 || // Reduced safety distance for top players
+                                      this.character.state.bones >= nearestPlayer.character.state.bones * 0.7; // More aggressive bone collection
+                
+                if (isSafeToCollect) {
+                    targetPosition = nearestBone.position;
+                    isHuntingBones = true;
+                }
+            }
+            // Then consider fleeing from threats
+            else if (nearestPlayer && 
+                nearestPlayer.distance < this.FLEE_DISTANCE && 
+                (this.character.state.bones < (nearestPlayer.character.state.bones * 0.8) || 
+                 (this.character.state.bones > 20 && nearestPlayer.character.state.bones > this.character.state.bones * 0.9))) {
+                const awayVector = new THREE.Vector3(
+                    this.character.state.position.x - nearestPlayer.character.state.position.x,
+                    0,
+                    this.character.state.position.z - nearestPlayer.character.state.position.z
+                ).normalize();
+
+                // Enhanced fleeing behavior - prioritize bones in escape path
+                let bestFleeTarget = null;
+                let bestFleeScore = -1;
+                for (const bone of nearbyBones) {
+                    const toBone = new THREE.Vector3(
+                        bone.position.x - this.character.state.position.x,
+                        0,
+                        bone.position.z - this.character.state.position.z
+                    ).normalize();
+                    
+                    const alignmentScore = awayVector.dot(toBone) + 1;
+                    const distanceScore = 1 - (bone.distance / this.BONE_DETECTION_RANGE);
+                    const score = alignmentScore * distanceScore * 1.8; // Increased score multiplier for top players
+                    
+                    if (score > bestFleeScore) {
+                        bestFleeScore = score;
+                        bestFleeTarget = bone.position;
+                    }
+                }
+
+                if (bestFleeTarget && bestFleeScore > 0.3) { // Lower threshold to pick up more bones while fleeing
+                    targetPosition = bestFleeTarget;
+                    isHuntingBones = true;
+                } else {
+                    targetPosition = new THREE.Vector3(
+                        this.character.state.position.x + awayVector.x * 20,
+                        this.character.state.position.y,
+                        this.character.state.position.z + awayVector.z * 20
+                    );
+                }
+            }
+            // Finally consider attacking weaker players
+            else if (weakestPlayer && 
+                     (this.character.state.bones >= weakestPlayer.character.state.bones * 1.2 || 
+                      (this.character.state.bones >= 15 && weakestPlayer.character.state.bones < this.character.state.bones * 0.9))) {
+                targetPosition = new THREE.Vector3(
+                    weakestPlayer.character.state.position.x,
+                    weakestPlayer.character.state.position.y,
+                    weakestPlayer.character.state.position.z
+                );
+                shouldBite = weakestPlayer.distance < 3.5;
+                isPursuing = true;
             }
         }
 
