@@ -67,17 +67,43 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
     };
     previewScene.add(previewDog.dog);
 
+    let animationFrameId: number;
     // Preview animation loop
     const animatePreview = () => {
       previewDog.state.rotation += 0.01;
       previewDog.update({}, 0.016);
       previewRenderer.render(previewScene, previewCamera);
-      requestAnimationFrame(animatePreview);
+      animationFrameId = requestAnimationFrame(animatePreview);
     };
     animatePreview();
 
     return () => {
-      if (previewRef.current) {
+      // Cancel animation frame
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+
+      // Dispose of geometries and materials
+      previewScene.traverse((object) => {
+        if (object instanceof THREE.Mesh) {
+          if (object.geometry) {
+            object.geometry.dispose();
+          }
+          if (object.material) {
+            if (Array.isArray(object.material)) {
+              object.material.forEach(material => material.dispose());
+            } else {
+              object.material.dispose();
+            }
+          }
+        }
+      });
+
+      // Dispose of renderer
+      previewRenderer.dispose();
+      
+      // Remove canvas from DOM
+      if (previewRef.current && previewRenderer.domElement) {
         previewRef.current.removeChild(previewRenderer.domElement);
       }
     };
