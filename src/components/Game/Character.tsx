@@ -1209,30 +1209,27 @@ export class Character {
   }
 
   dropSomeBones(bonesToDrop?: number): number {
-    if (this.state.bones <= 0) {
+    if (this.state.bones === 0) {
       return 0;
     }
 
-    // Calculate bones to drop
-    const bonesDropped = bonesToDrop || this.BONES_TO_DROP;
-    const actualBonesToDrop = Math.min(bonesDropped, this.state.bones);
-
-    // Update bones count
+    const actualBonesToDrop = bonesToDrop ?? Math.min(this.BONES_TO_DROP, this.state.bones);
     this.state.bones = Math.max(0, this.state.bones - actualBonesToDrop);
-    
-    // Recalculate size based on remaining bones
-    this.state.size = Math.max(
-      this.MIN_SIZE,
+
+    // Update size based on new bone count
+    const targetSize = Math.min(
+      this.MAX_SIZE,
       this.MIN_SIZE + (this.state.bones * this.GROWTH_PER_BONE)
     );
-    
-    // Update the dog's physical appearance immediately
-    this.updateDogPosition();
-    
-    // Trigger hit animation after size change
+    this.state.size = targetSize;
+
+    // Update the dog's physical appearance
+    this.dog.scale.setScalar(this.state.size);
+
+    // Set hit state for visual feedback
     this.state.isHit = true;
     this.state.hitTimer = this.HIT_FLASH_DURATION;
-    
+
     return actualBonesToDrop;
   }
 
