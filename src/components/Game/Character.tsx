@@ -1209,42 +1209,30 @@ export class Character {
   }
 
   dropSomeBones(bonesToDrop?: number): number {
-    console.log(`[dropSomeBones] ===== START =====`);
-    console.log(`[dropSomeBones] Initial state - Bones: ${this.state.bones}, Size: ${this.state.size.toFixed(2)}`);
-    
     if (this.state.bones <= 0) {
-      console.log('[dropSomeBones] No bones to drop, returning 0');
       return 0;
     }
 
     // Calculate bones to drop
     const bonesDropped = bonesToDrop || this.BONES_TO_DROP;
     const actualBonesToDrop = Math.min(bonesDropped, this.state.bones);
-    console.log(`[dropSomeBones] Will drop ${actualBonesToDrop} out of ${this.state.bones} bones`);
 
     // Update bones count
-    const oldBones = this.state.bones;
     this.state.bones = Math.max(0, this.state.bones - actualBonesToDrop);
-    console.log(`[dropSomeBones] Bones updated: ${oldBones} -> ${this.state.bones}`);
     
     // Recalculate size based on remaining bones
-    const oldSize = this.state.size;
     this.state.size = Math.max(
       this.MIN_SIZE,
       this.MIN_SIZE + (this.state.bones * this.GROWTH_PER_BONE)
     );
-    console.log(`[dropSomeBones] Size updated: ${oldSize.toFixed(2)} -> ${this.state.size.toFixed(2)}`);
     
     // Update the dog's physical appearance immediately
-    console.log('[dropSomeBones] Updating physical appearance');
     this.updateDogPosition();
     
     // Trigger hit animation after size change
-    console.log('[dropSomeBones] Setting hit state for visual feedback');
     this.state.isHit = true;
     this.state.hitTimer = this.HIT_FLASH_DURATION;
     
-    console.log(`[dropSomeBones] ===== END =====`);
     return actualBonesToDrop;
   }
 

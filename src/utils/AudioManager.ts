@@ -18,12 +18,8 @@ class AudioManager {
       loop: true,
       volume: 0.5,
       preload: true,
-      onload: () => {
-        console.log('Title music loaded successfully');
-      },
-      onloaderror: (_: any, error: any) => {
-        console.error('Error loading title music:', error);
-      }
+      onload: () => {},
+      onloaderror: () => {}
     });
 
     // Background music for gameplay
@@ -77,16 +73,12 @@ class AudioManager {
   }
 
   public playTitleMusic() {
-    console.log('Attempting to play title music');
     this.stopGameMusic();
     if (this.titleMusic.state() === 'loaded') {
       this.titleMusic.play();
-      console.log('Title music started playing');
     } else {
-      console.log('Title music not loaded yet, waiting...');
       this.titleMusic.once('load', () => {
         this.titleMusic.play();
-        console.log('Title music started playing after load');
       });
     }
   }

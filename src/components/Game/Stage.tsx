@@ -272,7 +272,6 @@ export class Stage {
       this.scene.add(bone);
       this.bonePool.push(bone);
     }
-    console.log(`Initialized bone pool with ${this.BONE_POOL_SIZE} bones`);
   }
 
   private getBoneFromPool(): THREE.Group | null {
@@ -285,7 +284,6 @@ export class Stage {
     }
 
     if (this.activeBones.size >= this.BONE_POOL_SIZE) {
-      console.warn('Bone pool exhausted, recycling oldest bone');
       const oldestBone = this.activeBones.values().next().value;
       if (oldestBone) {
         this.activeBones.delete(oldestBone);
@@ -295,7 +293,6 @@ export class Stage {
       }
     }
 
-    console.error('Could not get bone from pool');
     return null;
   }
 
@@ -333,7 +330,6 @@ export class Stage {
   private createBone(): Bone {
     const boneGroup = this.getBoneFromPool();
     if (!boneGroup) {
-      console.error('Failed to get bone from pool');
       return this.createBoneWithNewMesh();
     }
 
@@ -1128,7 +1124,6 @@ export class Stage {
                 player.state.bones = 100;
                 player.state.hasWon = true;
                 player.updateDogPosition();
-                console.log(`Player ${player.state.name} has won with 100 bones!`);
               }
             }
           }
@@ -1268,8 +1263,6 @@ export class Stage {
     if (permanentBones < this.TARGET_BONES && !hasWinner) {
       // Calculate exact number needed to reach target
       const bonesToSpawn = this.TARGET_BONES - permanentBones;
-      
-      console.log(`Spawning ${bonesToSpawn} bones. Current permanent bones: ${permanentBones}, Target: ${this.TARGET_BONES}`);
       
       // Spawn all needed bones immediately to maintain minimum
       for (let i = 0; i < bonesToSpawn; i++) {
@@ -1483,7 +1476,6 @@ export class Stage {
   private createBonePile(position: { x: number, y: number, z: number }, count: number, baseVelocity: number) {
     // Limit the number of bones to prevent pool exhaustion
     const actualCount = Math.min(count, this.MAX_EXPLOSION_BONES);
-    console.log(`[createBonePile] Creating pile of ${actualCount} bones at (${position.x.toFixed(2)}, ${position.y.toFixed(2)}, ${position.z.toFixed(2)})`);
     
     for (let i = 0; i < actualCount; i++) {
       const angle = (i / actualCount) * Math.PI * 2;
@@ -1503,6 +1495,5 @@ export class Stage {
         this.droppingBones.push(bone);
       }
     }
-    console.log(`[createBonePile] Added ${actualCount} bones to droppingBones array (total: ${this.droppingBones.length})`);
   }
 }
