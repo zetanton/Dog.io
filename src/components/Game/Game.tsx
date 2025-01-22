@@ -179,6 +179,13 @@ const Game: FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) => {
 
       const currentTime = performance.now();
       const deltaTime = (currentTime - gameStateRef.current.lastTime) / 1000;
+
+      // Frame rate control (144 FPS)
+      if (deltaTime < 1 / 144) {
+        requestAnimationFrame(animate);
+        return;
+      }
+
       gameStateRef.current.lastTime = currentTime;
 
       // Check for win condition

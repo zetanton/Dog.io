@@ -110,11 +110,23 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
     let animationFrameId: number;
     // Preview animation loop
     const animatePreview = () => {
+      const currentTime = performance.now();
+      const deltaTime = (currentTime - lastPreviewTime) / 1000;
+
+      // Frame rate control (144 FPS)
+      if (deltaTime < 1 / 144) {
+        animationFrameId = requestAnimationFrame(animatePreview);
+        return;
+      }
+
+      lastPreviewTime = currentTime;
       previewDog.state.rotation += 0.01;
-      previewDog.update({}, 0.016);
+      previewDog.update({}, deltaTime);
       previewRenderer.render(previewScene, previewCamera);
       animationFrameId = requestAnimationFrame(animatePreview);
     };
+
+    let lastPreviewTime = performance.now();
     animatePreview();
 
     return () => {
@@ -236,12 +248,19 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
       );
     }
 
-    // Animation loop
-    let lastTime = performance.now();
+    // Animation loop for background scene
+    let lastBackgroundTime = performance.now();
     const animate = () => {
       const currentTime = performance.now();
-      const deltaTime = (currentTime - lastTime) / 1000;
-      lastTime = currentTime;
+      const deltaTime = (currentTime - lastBackgroundTime) / 1000;
+
+      // Frame rate control (144 FPS)
+      if (deltaTime < 1 / 144) {
+        requestAnimationFrame(animate);
+        return;
+      }
+
+      lastBackgroundTime = currentTime;
 
       // Rotate camera around the scene
       const cameraAngle = currentTime * 0.0001;
