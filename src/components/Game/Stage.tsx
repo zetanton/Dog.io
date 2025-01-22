@@ -62,8 +62,15 @@ export class Stage {
   private playerCache: WeakMap<Character, PlayerCache> = new WeakMap();
   private nameTagCache: WeakMap<Character, NameTagCache> = new WeakMap();
 
+  // Shared geometries and materials for bones
+  private static boneGeometry: THREE.CylinderGeometry;
+  private static boneEndGeometry: THREE.SphereGeometry;
+  private static boneMaterial: THREE.MeshPhongMaterial;
+  private static boneBlinkingMaterial: THREE.MeshPhongMaterial;
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
+    this.initSharedResources();
     this.createGround();
     this.createBoundaries();
     this.createEnvironment();
@@ -72,6 +79,19 @@ export class Stage {
     this.initSpawnLocations();
     this.initSpatialGrid();
     this.spawnInitialBones();
+  }
+
+  private initSharedResources() {
+    if (!Stage.boneGeometry) {
+      Stage.boneGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.5, 8);
+      Stage.boneEndGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+      Stage.boneMaterial = new THREE.MeshPhongMaterial({ color: 0xFFFFFF });
+      Stage.boneBlinkingMaterial = new THREE.MeshPhongMaterial({ 
+        color: 0xFFFFFF,
+        transparent: true,
+        opacity: 1.0
+      });
+    }
   }
 
   private createGround() {
@@ -161,11 +181,12 @@ export class Stage {
   }
 
   private getRandomPosition(radius: number, existingPositions: Array<{ pos: THREE.Vector3, radius: number }>, maxAttempts = 50): THREE.Vector3 | null {
+    const margin = radius + 2; // Add extra margin to ensure objects are not too close to boundaries
     for (let i = 0; i < maxAttempts; i++) {
       const position = new THREE.Vector3(
-        (Math.random() - 0.5) * (this.STAGE_SIZE - radius * 2),
+        (Math.random() - 0.5) * (this.STAGE_SIZE - margin * 2),
         0,
-        (Math.random() - 0.5) * (this.STAGE_SIZE - radius * 2)
+        (Math.random() - 0.5) * (this.STAGE_SIZE - margin * 2)
       );
       
       if (!this.isPositionOccupied(position, radius, existingPositions)) {
@@ -288,22 +309,19 @@ export class Stage {
   private createBoneMesh(): THREE.Group {
     const boneGroup = new THREE.Group();
     
-    // Create bone geometry
-    const boneGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.5, 8);
-    const boneMaterial = new THREE.MeshPhongMaterial({ color: 0xFFFFFF });
-    const bone = new THREE.Mesh(boneGeometry, boneMaterial);
+    // Use shared geometry and material for the bone body
+    const bone = new THREE.Mesh(Stage.boneGeometry, Stage.boneMaterial);
     bone.rotation.x = Math.PI / 2;
     bone.castShadow = true;
     boneGroup.add(bone);
 
-    // Add bone ends
-    const endGeometry = new THREE.SphereGeometry(0.15, 8, 8);
-    const end1 = new THREE.Mesh(endGeometry, boneMaterial);
+    // Use shared geometry and material for bone ends
+    const end1 = new THREE.Mesh(Stage.boneEndGeometry, Stage.boneMaterial);
     end1.position.z = 0.25;
     end1.castShadow = true;
     boneGroup.add(end1);
 
-    const end2 = new THREE.Mesh(endGeometry, boneMaterial);
+    const end2 = new THREE.Mesh(Stage.boneEndGeometry, Stage.boneMaterial);
     end2.position.z = -0.25;
     end2.castShadow = true;
     boneGroup.add(end2);
@@ -343,7 +361,7 @@ export class Stage {
     // Add ground spawn locations (increased number for better ground coverage)
     for (let i = 0; i < 8; i++) {
       const groundSpawn = new THREE.Vector3(
-        (Math.random() - 0.5) * (this.STAGE_SIZE - 10),
+        (Math.random() - 0.5) * (this.STAGE_SIZE - 10), // Use fixed margin of 10 for bones
         0.5,
         (Math.random() - 0.5) * (this.STAGE_SIZE - 10)
       );
@@ -370,7 +388,7 @@ export class Stage {
       // Check for collisions with obstacles (trees and rocks)
       let hasCollision = false;
       const boneRadius = 0.5; // Approximate radius of the bone
-      const margin = 1.0; // Additional margin to prevent bones from being too close to obstacles
+      const margin = 5.0; // Increased margin to prevent bones from spawning too close to boundaries or obstacles
 
       for (const object of this.collidableObjects) {
         // Skip platforms in collision check since we want to spawn on them
@@ -945,36 +963,30 @@ export class Stage {
           // Start blinking in the last 2 seconds
           if (timeLeft <= 2000) {
             // Get all meshes in the bone group
-            bone.mesh.traverse((child) => {
-              if (child instanceof THREE.Mesh) {
-                const material = child.material as THREE.MeshPhongMaterial;
-                if (material) {
-                  // Blink faster as time runs out
-                  const blinkSpeed = Math.max(50, timeLeft / 10); // Increased blink frequency
-                  const shouldBeVisible = Math.floor(Date.now() / blinkSpeed) % 2 === 0;
-                  // Make sure all parts of the bone blink together
-                  material.visible = shouldBeVisible;
-                  material.transparent = true;
-                  material.opacity = shouldBeVisible ? 1 : 0;
-                }
-              }
-            });
-
-            // Only mark as collected when time is completely up
             if (timeLeft <= 0) {
               bone.collected = true;
               this.cleanupBone(bone);
+            } else {
+              // Blink faster as time runs out
+              const blinkSpeed = Math.max(50, timeLeft / 10);
+              const shouldBeVisible = Math.floor(Date.now() / blinkSpeed) % 2 === 0;
+              
+              // Update the shared blinking material's opacity
+              Stage.boneBlinkingMaterial.opacity = shouldBeVisible ? 
+                (timeLeft / 2000) : 0;
+
+              // Apply blinking material if not already applied
+              bone.mesh.traverse((child) => {
+                if (child instanceof THREE.Mesh && child.material !== Stage.boneBlinkingMaterial) {
+                  child.material = Stage.boneBlinkingMaterial;
+                }
+              });
             }
           } else {
-            // Ensure bone is fully visible during the first 10 seconds
+            // Ensure bone uses regular material during the first 10 seconds
             bone.mesh.traverse((child) => {
-              if (child instanceof THREE.Mesh) {
-                const material = child.material as THREE.MeshPhongMaterial;
-                if (material) {
-                  material.visible = true;
-                  material.transparent = false;
-                  material.opacity = 1;
-                }
+              if (child instanceof THREE.Mesh && child.material !== Stage.boneMaterial) {
+                child.material = Stage.boneMaterial;
               }
             });
           }

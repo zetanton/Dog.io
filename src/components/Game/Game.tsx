@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, FC } from 'react';
 import * as THREE from 'three';
-import { Character } from './Character';
+import Character, { DogPattern } from './Character';
 import { Stage } from './Stage';
 import { Hydrant } from './Hydrant';
 import PowerCooldown from '../UI/PowerCooldown';
@@ -25,7 +25,14 @@ interface GameProps {
   onReturnToMenu: () => void;
 }
 
-const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) => {
+const getColorHexString = (colorOption: THREE.Color | DogPattern): string => {
+  if (colorOption instanceof THREE.Color) {
+    return colorOption.getHexString();
+  }
+  return colorOption.base.getHexString();
+};
+
+const Game: FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const gameStateRef = useRef<GameState | null>(null);
   const [scores, setScores] = useState<{bones: number, size: number}>({ bones: 0, size: 1 });
@@ -321,7 +328,7 @@ const Game: React.FC<GameProps> = ({ playerName, colorIndex, onReturnToMenu }) =
                     <div 
                       className="w-3 h-3 rounded-full"
                       style={{
-                        backgroundColor: '#' + Character.DOG_COLORS[player.state.colorIndex || 0].getHexString()
+                        backgroundColor: '#' + getColorHexString(Character.DOG_COLORS[player.state.colorIndex || 0])
                       }}
                     />
                     <span className="truncate">{player.state.name}</span>

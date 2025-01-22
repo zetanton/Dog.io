@@ -3,7 +3,15 @@ import AudioManager from '../../utils/AudioManager';
 import dogNames from '../../data/dogNames.json';
 import { AIController } from './AIController';
 
-interface CharacterState {
+export interface DogPattern {
+  base: THREE.Color;
+  pattern: string;
+  spots?: THREE.Color;
+  secondary?: THREE.Color;
+  tertiary?: THREE.Color;
+}
+
+export interface CharacterState {
   position: {
     x: number;
     y: number;
@@ -16,7 +24,7 @@ interface CharacterState {
   biteTimer: number;
   isMoving: boolean;
   animationTime: number;
-  color: THREE.Color;
+  colorOption: THREE.Color | DogPattern;
   velocity: THREE.Vector3;
   knockbackTime: number;
   name: string;
@@ -86,18 +94,31 @@ export class Character {
   private clippingPlanes: THREE.Plane[];
 
   static readonly DOG_COLORS = [
-    new THREE.Color(0x8B4513), // Brown
-    new THREE.Color(0xD2691E), // Chocolate
-    new THREE.Color(0xDEB887), // Burlywood
-    new THREE.Color(0xF4A460), // Sandy Brown
-    new THREE.Color(0xD2B48C), // Tan
-    new THREE.Color(0xBC8F8F), // Rosy Brown
-    new THREE.Color(0xF5DEB3), // Wheat
-    new THREE.Color(0xFFE4B5), // Moccasin
-    new THREE.Color(0xFFDEAD), // Navajo White
-    new THREE.Color(0xFFA07A), // Light Salmon
-    new THREE.Color(0x000000), // Black
     new THREE.Color(0xFFFFFF), // White
+    new THREE.Color(0xFFFDD0), // Cream
+    new THREE.Color(0xE3C27D), // Fawn (Light Tan)
+    new THREE.Color(0xDAA520), // Golden
+    new THREE.Color(0x8B5A2B), // Light Chocolate (Brown)
+    new THREE.Color(0x8B4513), // Brownish Red
+    new THREE.Color(0xB2BEB5), // Gray (Silver)
+    new THREE.Color(0x5A7080), // Blue (Diluted Black)
+    new THREE.Color(0x36454F), // Charcoal
+    { // Dalmatian
+      base: new THREE.Color(0xFFFFFF),
+      pattern: 'dalmatian',
+      spots: new THREE.Color(0x000000)  // Pure black spots
+    },
+    { // Black and Tan
+      base: new THREE.Color(0x000000),  // Pure black base
+      pattern: 'blacktan',
+      secondary: new THREE.Color(0x8B4513)  // Changed to SaddleBrown for a darker, richer tan
+    },
+    { // Tricolor
+      base: new THREE.Color(0xFFFFFF),
+      pattern: 'tricolor',
+      secondary: new THREE.Color(0x000000),  // Pure black parts
+      tertiary: new THREE.Color(0x8B4513)  // Changed to SaddleBrown for a darker, richer tan
+    }
   ];
 
   constructor(isAI: boolean, colorIndex: number, name: string = isAI ? dogNames.names[Math.floor(Math.random() * dogNames.names.length)] : 'Player') {
@@ -128,7 +149,7 @@ export class Character {
       biteTimer: 0,
       isMoving: false,
       animationTime: 0,
-      color: Character.DOG_COLORS[colorIndex % Character.DOG_COLORS.length],
+      colorOption: Character.DOG_COLORS[colorIndex % Character.DOG_COLORS.length],
       velocity: new THREE.Vector3(),
       knockbackTime: 0,
       name: name,
@@ -157,59 +178,200 @@ export class Character {
     this.updateDogPosition();
   }
 
+  private createDogMaterial(colorOption: THREE.Color | DogPattern): THREE.Material {
+    if (colorOption instanceof THREE.Color) {
+      return new THREE.MeshPhongMaterial({ color: colorOption });
+    }
+
+    // Create a canvas for the texture
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d')!;
+    canvas.width = 512;
+    canvas.height = 512;
+
+    // Fill with base color
+    context.fillStyle = `#${colorOption.base.getHexString()}`;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    switch (colorOption.pattern) {
+      case 'dalmatian':
+        // Add larger black spots
+        context.fillStyle = `#${colorOption.spots!.getHexString()}`;
+        for (let i = 0; i < 30; i++) {
+          const x = Math.random() * canvas.width;
+          const y = Math.random() * canvas.height;
+          const radius = 15 + Math.random() * 25;
+          context.beginPath();
+          context.arc(x, y, radius, 0, Math.PI * 2);
+          context.fill();
+        }
+        break;
+
+      case 'blacktan':
+        // Start with black base
+        context.fillStyle = `#${colorOption.base.getHexString()}`;
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Add tan markings
+        context.fillStyle = `#${colorOption.secondary!.getHexString()}`;
+        
+        // Tan chest and belly (bottom half)
+        context.fillRect(0, canvas.height * 0.5, canvas.width, canvas.height * 0.5);
+        
+        // Tan muzzle (lower part of face)
+        context.fillRect(canvas.width * 0.3, canvas.height * 0.15, canvas.width * 0.4, canvas.height * 0.15);
+        
+        // Tan eyebrow spots
+        context.beginPath();
+        context.arc(canvas.width * 0.35, canvas.height * 0.12, 15, 0, Math.PI * 2);
+        context.arc(canvas.width * 0.65, canvas.height * 0.12, 15, 0, Math.PI * 2);
+        context.fill();
+        
+        // Black mask overlay (restore black on top part of face)
+        context.fillStyle = `#${colorOption.base.getHexString()}`;
+        context.fillRect(canvas.width * 0.2, 0, canvas.width * 0.6, canvas.height * 0.1);
+        
+        // Black back overlay (ensure top is black)
+        context.fillRect(0, 0, canvas.width, canvas.height * 0.45);
+        
+        // Black tail area
+        context.fillRect(canvas.width * 0.4, canvas.height * 0.4, canvas.width * 0.2, canvas.height * 0.2);
+        break;
+
+      case 'tricolor':
+        // White base is already there
+        
+        // Add black patches
+        context.fillStyle = `#${colorOption.secondary!.getHexString()}`;
+        // Black back patch
+        context.fillRect(0, 0, canvas.width, canvas.height * 0.4);
+        // Black ear patches
+        context.fillRect(0, 0, canvas.width * 0.3, canvas.height * 0.3);
+        context.fillRect(canvas.width * 0.7, 0, canvas.width * 0.3, canvas.height * 0.3);
+        
+        // Add brown parts
+        context.fillStyle = `#${colorOption.tertiary!.getHexString()}`;
+        // Brown legs
+        context.fillRect(0, canvas.height * 0.7, canvas.width * 0.2, canvas.height * 0.3);
+        context.fillRect(canvas.width * 0.8, canvas.height * 0.7, canvas.width * 0.2, canvas.height * 0.3);
+        // Brown tail area
+        context.fillRect(canvas.width * 0.4, canvas.height * 0.4, canvas.width * 0.2, canvas.height * 0.2);
+        break;
+    }
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1, 1);
+
+    return new THREE.MeshPhongMaterial({ map: texture });
+  }
+
+  private getSecondaryMaterial(colorOption: THREE.Color | DogPattern, multiplier: number): THREE.Material {
+    if (colorOption instanceof THREE.Color) {
+      return new THREE.MeshPhongMaterial({ 
+        color: colorOption.clone().multiplyScalar(multiplier) 
+      });
+    }
+    // For patterns, use the base color for secondary materials
+    return new THREE.MeshPhongMaterial({ 
+      color: colorOption.base.clone().multiplyScalar(multiplier) 
+    });
+  }
+
   private createDog(): THREE.Group {
     const group = new THREE.Group();
     this.bodyGroup = new THREE.Group();
     this.headGroup = new THREE.Group();
 
-    // Body
-    const bodyGeometry = new THREE.BoxGeometry(1, 0.6, 1.5);
-    const bodyMaterial = new THREE.MeshPhongMaterial({ color: this.state.color });
+    // Get the color option and create material
+    const bodyMaterial = this.createDogMaterial(this.state.colorOption);
+
+    // Body - made slightly longer and narrower
+    const bodyGeometry = new THREE.BoxGeometry(0.8, 0.7, 1.6);
     const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
     body.position.y = 0.5;
     body.castShadow = true;
     this.bodyGroup.add(body);
 
-    // Head - moved to front of body
-    this.headGroup.position.set(0, 0.7, 0.75);
+    // Head - larger and more cubic
+    this.headGroup.position.set(0, 0.85, 0.7);
     this.bodyGroup.add(this.headGroup);
 
-    const headGeometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+    const headGeometry = new THREE.BoxGeometry(0.7, 0.7, 0.7);
     const head = new THREE.Mesh(headGeometry, bodyMaterial);
     head.castShadow = true;
     this.headGroup.add(head);
 
-    // Snout - adjusted to point forward
-    const snoutGeometry = new THREE.BoxGeometry(0.3, 0.3, 0.3);
-    const snoutMaterial = new THREE.MeshPhongMaterial({ color: this.state.color.clone().multiplyScalar(0.8) });
+    // Snout - more pronounced
+    const snoutGeometry = new THREE.BoxGeometry(0.4, 0.35, 0.4);
+    const snoutMaterial = this.getSecondaryMaterial(this.state.colorOption, 0.8);
     const snout = new THREE.Mesh(snoutGeometry, snoutMaterial);
-    snout.position.set(0, 0, 0.3);
+    snout.position.set(0, -0.1, 0.4);
     snout.castShadow = true;
     this.headGroup.add(snout);
 
-    // Ears - adjusted positions
-    const earGeometry = new THREE.BoxGeometry(0.2, 0.3, 0.2);
-    const earMaterial = new THREE.MeshPhongMaterial({ color: this.state.color.clone().multiplyScalar(0.8) });
+    // Nose - black nose tip
+    const noseGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.1);
+    const noseMaterial = new THREE.MeshPhongMaterial({ color: 0x000000 });
+    const nose = new THREE.Mesh(noseGeometry, noseMaterial);
+    nose.position.set(0, -0.1, 0.6);
+    this.headGroup.add(nose);
+
+    // Eyes - white base with black pupils
+    const eyeGeometry = new THREE.BoxGeometry(0.15, 0.15, 0.1);
+    const eyeWhiteMaterial = new THREE.MeshPhongMaterial({ color: 0xFFFFFF });
+    const eyePupilMaterial = new THREE.MeshPhongMaterial({ color: 0x000000 });
+
+    // Left eye
+    const leftEyeWhite = new THREE.Mesh(eyeGeometry, eyeWhiteMaterial);
+    leftEyeWhite.position.set(0.2, 0.1, 0.35);
+    this.headGroup.add(leftEyeWhite);
+
+    const leftEyePupil = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.07, 0.11),
+      eyePupilMaterial
+    );
+    leftEyePupil.position.set(0.2, 0.1, 0.4);
+    this.headGroup.add(leftEyePupil);
+
+    // Right eye
+    const rightEyeWhite = new THREE.Mesh(eyeGeometry, eyeWhiteMaterial);
+    rightEyeWhite.position.set(-0.2, 0.1, 0.35);
+    this.headGroup.add(rightEyeWhite);
+
+    const rightEyePupil = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.07, 0.11),
+      eyePupilMaterial
+    );
+    rightEyePupil.position.set(-0.2, 0.1, 0.4);
+    this.headGroup.add(rightEyePupil);
+
+    // Ears - larger and more prominent
+    const earGeometry = new THREE.BoxGeometry(0.25, 0.35, 0.2);
+    const earMaterial = this.getSecondaryMaterial(this.state.colorOption, 0.8);
     
     const leftEar = new THREE.Mesh(earGeometry, earMaterial);
-    leftEar.position.set(0.25, 0.3, 0);
+    leftEar.position.set(0.3, 0.4, 0);
+    leftEar.rotation.z = -0.2; // Slight tilt outward
     leftEar.castShadow = true;
     this.headGroup.add(leftEar);
 
     const rightEar = new THREE.Mesh(earGeometry, earMaterial);
-    rightEar.position.set(-0.25, 0.3, 0);
+    rightEar.position.set(-0.3, 0.4, 0);
+    rightEar.rotation.z = 0.2; // Slight tilt outward
     rightEar.castShadow = true;
     this.headGroup.add(rightEar);
 
-    // Legs - adjusted positions
-    const legGeometry = new THREE.BoxGeometry(0.2, 0.5, 0.2);
-    const legMaterial = new THREE.MeshPhongMaterial({ color: this.state.color.clone().multiplyScalar(0.9) });
+    // Legs - thicker and more defined
+    const legGeometry = new THREE.BoxGeometry(0.25, 0.5, 0.25);
+    const legMaterial = this.getSecondaryMaterial(this.state.colorOption, 0.9);
     
     const legPositions = [
-      { x: 0.35, y: 0.25, z: 0.5 },   // Front Right
-      { x: -0.35, y: 0.25, z: 0.5 },  // Front Left
-      { x: 0.35, y: 0.25, z: -0.5 },  // Back Right
-      { x: -0.35, y: 0.25, z: -0.5 }  // Back Left
+      { x: 0.3, y: 0.25, z: 0.5 },    // Front Right
+      { x: -0.3, y: 0.25, z: 0.5 },   // Front Left
+      { x: 0.3, y: 0.25, z: -0.5 },   // Back Right
+      { x: -0.3, y: 0.25, z: -0.5 }   // Back Left
     ];
 
     legPositions.forEach(pos => {
@@ -220,11 +382,11 @@ export class Character {
       this.legs.push(leg);
     });
 
-    // Tail - adjusted position
-    const tailGeometry = new THREE.BoxGeometry(0.15, 0.15, 0.4);
-    const tailMaterial = new THREE.MeshPhongMaterial({ color: this.state.color.clone().multiplyScalar(0.9) });
+    // Tail - thicker base, tapered end
+    const tailGeometry = new THREE.BoxGeometry(0.2, 0.2, 0.5);
+    const tailMaterial = this.getSecondaryMaterial(this.state.colorOption, 0.9);
     this.tail = new THREE.Mesh(tailGeometry, tailMaterial);
-    this.tail.position.set(0, 0.6, -0.8);
+    this.tail.position.set(0, 0.5, -0.8);
     this.tail.rotation.x = -Math.PI / 4;
     this.tail.castShadow = true;
     this.bodyGroup.add(this.tail);
@@ -232,7 +394,7 @@ export class Character {
     // Rotate the entire body group 180 degrees so it faces forward
     this.bodyGroup.rotation.y = Math.PI;
     
-    // Remove bark lines section and keep only text
+    // Create bark text
     const barkGroup = new THREE.Group();
     
     // Create text as a textured plane

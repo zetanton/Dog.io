@@ -1,12 +1,52 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { Character } from '../Game/Character';
+import { Character, DogPattern } from '../Game/Character';
 import AudioManager from '../../utils/AudioManager';
 import { FaVolumeUp, FaVolumeMute } from 'react-icons/fa';
 
 interface MainMenuProps {
   onStartGame: (playerName: string, colorIndex: number) => void;
 }
+
+const createPatternPreview = (colorOption: THREE.Color | DogPattern): React.CSSProperties => {
+  if (colorOption instanceof THREE.Color) {
+    return { backgroundColor: '#' + colorOption.getHexString() };
+  }
+
+  switch (colorOption.pattern) {
+    case 'dalmatian':
+      return {
+        background: `linear-gradient(45deg, 
+          #${colorOption.base.getHexString()} 0%, 
+          #${colorOption.base.getHexString()} 50%, 
+          #${colorOption.spots!.getHexString()} 50%, 
+          #${colorOption.spots!.getHexString()} 100%)`
+      };
+
+    case 'blacktan':
+      return {
+        background: `linear-gradient(to right, 
+          #${colorOption.base.getHexString()} 0%, 
+          #${colorOption.base.getHexString()} 50%, 
+          #${colorOption.secondary!.getHexString()} 50%, 
+          #${colorOption.secondary!.getHexString()} 100%)`
+      };
+
+    case 'tricolor':
+      return {
+        background: `linear-gradient(to right, 
+          #${colorOption.base.getHexString()} 0%, 
+          #${colorOption.base.getHexString()} 33.33%, 
+          #${colorOption.secondary!.getHexString()} 33.33%, 
+          #${colorOption.secondary!.getHexString()} 66.66%, 
+          #${colorOption.tertiary!.getHexString()} 66.66%, 
+          #${colorOption.tertiary!.getHexString()} 100%)`
+      };
+
+    default:
+      return { backgroundColor: '#FFFFFF' };
+  }
+};
 
 const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -295,17 +335,17 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
               <div className="bg-black bg-opacity-50 p-4 rounded-lg">
                 <h2 className="text-xl font-bold mb-4 text-yellow-400">Choose Your Dog Color</h2>
                 <div className="grid grid-cols-6 gap-3">
-                  {Array.from({ length: Character.DOG_COLORS.length }).map((_, i) => (
+                  {Character.DOG_COLORS.map((color, index) => (
                     <button
-                      key={i}
-                      onClick={() => setSelectedColor(i)}
+                      key={index}
                       className={`w-full aspect-square rounded-lg transition-all transform hover:scale-110 ${
-                        selectedColor === i ? 'ring-4 ring-yellow-400 scale-110' : ''
+                        selectedColor === index ? 'ring-4 ring-yellow-400 scale-110' : ''
                       }`}
                       style={{ 
-                        backgroundColor: '#' + Character.DOG_COLORS[i].getHexString(),
-                        boxShadow: selectedColor === i ? '0 0 20px rgba(255,255,255,0.5)' : 'none'
+                        ...createPatternPreview(color),
+                        boxShadow: selectedColor === index ? '0 0 20px rgba(255,255,255,0.5)' : 'none'
                       }}
+                      onClick={() => setSelectedColor(index)}
                     />
                   ))}
                 </div>
