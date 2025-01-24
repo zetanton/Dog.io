@@ -58,7 +58,6 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
   useEffect(() => {
     // Initialize and play title music
     const audioManager = AudioManager.getInstance();
-    console.log('Starting title music from MainMenu');
     audioManager.playTitleMusic();
   }, []); // No dependencies, runs only once
 
@@ -296,7 +295,6 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
   }, []);
 
   const handleMuteToggle = () => {
-    console.log('Mute button clicked');
     const audioManager = AudioManager.getInstance();
     const newMutedState = audioManager.toggleMute();
     setIsMuted(newMutedState);
