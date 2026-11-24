@@ -6,20 +6,23 @@ interface GameState {
   isPlaying: boolean;
   playerName: string;
   colorIndex: number;
+  roomCode?: string;
 }
 
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>({
     isPlaying: false,
     playerName: '',
-    colorIndex: 0
+    colorIndex: 0,
+    roomCode: undefined
   });
 
-  const handleStartGame = (playerName: string, colorIndex: number) => {
+  const handleStartGame = (playerName: string, colorIndex: number, roomCode?: string) => {
     setGameState({
       isPlaying: true,
       playerName,
-      colorIndex
+      colorIndex,
+      roomCode
     });
   };
 
@@ -27,7 +30,8 @@ const App: React.FC = () => {
     setGameState({
       isPlaying: false,
       playerName: '',
-      colorIndex: 0
+      colorIndex: 0,
+      roomCode: undefined
     });
   };
 
@@ -38,6 +42,7 @@ const App: React.FC = () => {
           playerName={gameState.playerName} 
           colorIndex={gameState.colorIndex}
           onReturnToMenu={handleReturnToMenu}
+          roomCode={gameState.roomCode}
         />
       ) : (
         <MainMenu onStartGame={handleStartGame} />

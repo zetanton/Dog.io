@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import AudioManager from '../../utils/AudioManager';
 import dogNames from '../../data/dogNames.json';
 import { AIController } from './AIController';
+import { Position, toVector3 } from '../../types/Position';
 
 export interface DogPattern {
   base: THREE.Color;
@@ -12,41 +13,46 @@ export interface DogPattern {
 }
 
 export interface CharacterState {
-  position: {
-    x: number;
-    y: number;
-    z: number;
-  };
+  id?: string;
+  name: string;
+  position: Position;
   rotation: number;
   size: number;
   bones: number;
-  isBiting: boolean;
-  biteTimer: number;
   isMoving: boolean;
-  animationTime: number;
-  colorOption: THREE.Color | DogPattern;
-  velocity: THREE.Vector3;
-  knockbackTime: number;
-  name: string;
-  colorIndex: number;
+  isBiting: boolean;
+  isMarking: boolean;
+  hasZoomies: boolean;
   isHit: boolean;
   hitTimer: number;
   isDying: boolean;
   dyingTimer: number;
+  knockbackTime: number;
+  biteTimer: number;
+  markingCooldown: number;
+  zoomiesCooldown: number;
   hasWon: boolean;
+  colorIndex: number;
+  animationTime: number;
+  colorOption: THREE.Color | DogPattern;
+  velocity: THREE.Vector3;
   isJumping: boolean;
   jumpVelocity: number;
   barkCooldown: number;
   isZooming: boolean;
-  zoomiesCooldown: number;
-  isMarking: boolean;
-  markingCooldown: number;
   markingLegSide?: 'left' | 'right';
   markingRadius: number;
   markingPosition?: THREE.Vector3;
   markingAnimationTime: number;
   isBarking: boolean;
   barkAnimationTime: number;
+  targetPosition?: THREE.Vector3;
+  targetRotation?: number;
+  predictedPosition?: THREE.Vector3;
+  previousPosition?: THREE.Vector3;
+  lastServerUpdate?: number;
+  lastUpdateTime?: number;
+  targetIsMoving?: boolean;
 }
 
 export class Character {
@@ -58,6 +64,8 @@ export class Character {
   legs: THREE.Mesh[] = [];
   tail: THREE.Mesh = new THREE.Mesh();
   territoryCircle?: THREE.Mesh;
+  position: THREE.Vector3 = new THREE.Vector3();
+  rotation: THREE.Euler = new THREE.Euler();
   readonly MOVE_SPEED = 0.08;
   protected readonly ROTATION_SPEED = 0.1;
   readonly BITE_DURATION = 0.25;
@@ -137,41 +145,46 @@ export class Character {
     ];
 
     this.state = {
-      position: {
-        x: 0,
-        y: 0.5,
-        z: 0
-      },
+      id: undefined,
+      name: name,
+      position: { x: 0, y: 0, z: 0 },
       rotation: Math.random() * Math.PI * 2,
       size: this.MIN_SIZE,
       bones: 0,
-      isBiting: false,
-      biteTimer: 0,
       isMoving: false,
-      animationTime: 0,
-      colorOption: Character.DOG_COLORS[colorIndex % Character.DOG_COLORS.length],
-      velocity: new THREE.Vector3(),
-      knockbackTime: 0,
-      name: name,
-      colorIndex: colorIndex,
+      isBiting: false,
+      isMarking: false,
+      hasZoomies: false,
       isHit: false,
       hitTimer: 0,
       isDying: false,
       dyingTimer: 0,
+      knockbackTime: 0,
+      biteTimer: 0,
+      markingCooldown: 0,
+      zoomiesCooldown: 0,
       hasWon: false,
+      colorIndex: colorIndex,
+      animationTime: 0,
+      colorOption: Character.DOG_COLORS[colorIndex % Character.DOG_COLORS.length],
+      velocity: new THREE.Vector3(),
       isJumping: false,
       jumpVelocity: 0,
       barkCooldown: 0,
       isZooming: false,
-      zoomiesCooldown: 0,
-      isMarking: false,
-      markingCooldown: 0,
       markingLegSide: undefined,
       markingRadius: 0,
       markingPosition: undefined,
       markingAnimationTime: 0,
       isBarking: false,
       barkAnimationTime: 0,
+      targetPosition: undefined,
+      targetRotation: undefined,
+      predictedPosition: undefined,
+      previousPosition: undefined,
+      lastServerUpdate: undefined,
+      lastUpdateTime: undefined,
+      targetIsMoving: undefined,
     };
 
     this.dog = this.createDog();
@@ -436,13 +449,8 @@ export class Character {
   }
 
   updateDogPosition() {
-    this.dog.position.set(
-      this.state.position.x,
-      this.state.position.y,
-      this.state.position.z
-    );
-    
-    // SIMPLE: Face where you're going. Period.
+    const position = toVector3(this.state.position);
+    this.dog.position.copy(position);
     this.dog.rotation.y = this.state.rotation;
     this.dog.scale.setScalar(this.state.size);
   }
@@ -1183,6 +1191,9 @@ export class Character {
     }
     
     this.updateDogPosition();
+    
+    // Update the dog model's scale immediately
+    this.dog.scale.setScalar(this.state.size);
   }
 
   dropAllBones(): number {

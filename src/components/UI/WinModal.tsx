@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 
 interface WinModalProps {
   playerName: string;
@@ -7,6 +7,19 @@ interface WinModalProps {
 }
 
 const WinModal: React.FC<WinModalProps> = ({ playerName, onPlayAgain, onReturnToMenu }) => {
+  useEffect(() => {
+    const handleReconnect = () => {
+      console.log('Reconnected to server');
+      // Optionally, you can add logic to rejoin the game or room
+    };
+
+    window.addEventListener('reconnect', handleReconnect);
+
+    return () => {
+      window.removeEventListener('reconnect', handleReconnect);
+    };
+  }, []);
+
   return (
     <div className="absolute inset-0 flex items-center justify-center p-4 z-50">
       <div className="bg-black bg-opacity-50 p-8 rounded-lg text-white w-full max-w-lg backdrop-blur-sm">

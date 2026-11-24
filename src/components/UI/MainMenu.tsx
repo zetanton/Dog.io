@@ -3,9 +3,10 @@ import * as THREE from 'three';
 import { Character, DogPattern } from '../Game/Character';
 import AudioManager from '../../utils/AudioManager';
 import { FaVolumeUp, FaVolumeMute } from 'react-icons/fa';
+import { RoomModal } from './RoomModal';
 
 interface MainMenuProps {
-  onStartGame: (playerName: string, colorIndex: number) => void;
+  onStartGame: (playerName: string, colorIndex: number, roomCode?: string) => void;
 }
 
 const createPatternPreview = (colorOption: THREE.Color | DogPattern): React.CSSProperties => {
@@ -54,6 +55,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
   const [playerName, setPlayerName] = useState('');
   const [selectedColor, setSelectedColor] = useState(0);
   const [isMuted, setIsMuted] = useState(AudioManager.getInstance().isSoundMuted());
+  const [showRoomModal, setShowRoomModal] = useState(false);
   
   useEffect(() => {
     // Initialize and play title music
@@ -99,11 +101,7 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
 
     // Create preview dog
     const previewDog = new Character(false, selectedColor, "Preview Dog");
-    previewDog.state.position = {
-      x: 0,
-      y: 1,
-      z: 0
-    };
+    previewDog.state.position = new THREE.Vector3(0, 1, 0);
     previewScene.add(previewDog.dog);
 
     let animationFrameId: number;
@@ -205,11 +203,11 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
     const backgroundDogs: Character[] = [];
     for (let i = 0; i < 5; i++) {
       const dog = new Character(true, Math.floor(Math.random() * 10));
-      dog.state.position = {
-        x: (Math.random() - 0.5) * 50,
-        y: 0.5,
-        z: (Math.random() - 0.5) * 50 - 10
-      };
+      dog.state.position = new THREE.Vector3(
+        (Math.random() - 0.5) * 50,
+        0.5,
+        (Math.random() - 0.5) * 50 - 10
+      );
       scene.add(dog.dog);
       backgroundDogs.push(dog);
     }
@@ -300,11 +298,6 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
     setIsMuted(newMutedState);
   };
 
-  const handleStartGame = () => {
-    if (playerName.trim()) {
-      onStartGame(playerName, selectedColor);
-    }
-  };
 
   return (
     <div className="relative w-full h-screen">
@@ -369,7 +362,11 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
               </div>
 
               <button
-                onClick={handleStartGame}
+                onClick={() => {
+                  if (playerName.trim()) {
+                    setShowRoomModal(true);
+                  }
+                }}
                 disabled={!playerName.trim()}
                 className="w-full py-4 bg-yellow-500 rounded-lg font-bold text-xl text-black disabled:opacity-50 transition-all transform hover:scale-105 hover:bg-yellow-400 disabled:hover:scale-100 shadow-lg"
               >
@@ -385,6 +382,15 @@ const MainMenu: React.FC<MainMenuProps> = ({ onStartGame }) => {
           </div>
         </div>
       </div>
+
+      {showRoomModal && (
+        <RoomModal
+          onClose={() => setShowRoomModal(false)}
+          onStartGame={onStartGame}
+          playerName={playerName}
+          selectedColor={selectedColor}
+        />
+      )}
     </div>
   );
 };

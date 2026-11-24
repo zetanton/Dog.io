@@ -3,15 +3,17 @@ import { Character } from './Character';
 import AudioManager from '../../utils/AudioManager';
 import dogNames from '../../data/dogNames.json';
 import TWEEN from '@tweenjs/tween.js';
+import { NetworkManager } from '../../network/NetworkManager';
 
-interface Bone {
-  mesh: THREE.Object3D;
+export interface Bone {
+  id: string;
+  mesh: THREE.Group;
   position: THREE.Vector3;
-  lastPosition?: THREE.Vector3;
   collected: boolean;
   timestamp: number;
-  lifespan?: number; // Optional lifespan in milliseconds
-  boundingBox?: THREE.Box3; // Add cached bounding box
+  lifespan?: number;
+  boundingBox?: THREE.Box3;
+  lastPosition?: THREE.Vector3;
 }
 
 interface DroppingBone extends Bone {
@@ -35,9 +37,16 @@ interface NameTagCache {
   lastHasWon: boolean;
 }
 
+export interface PowerUp {
+  id: string;
+  type: string;
+  mesh: THREE.Mesh;
+  position: THREE.Vector3;
+}
+
 export class Stage {
   scene: THREE.Scene;
-  bones: Bone[] = [];
+  public bones: Bone[] = [];
   droppingBones: DroppingBone[] = [];
   players: Character[] = [];
   platforms: THREE.Mesh[] = [];
@@ -46,7 +55,6 @@ export class Stage {
   private readonly STAGE_SIZE = 100;
   private readonly TARGET_BONES = 50;
   private readonly BONE_DROP_DURATION = 0.5;
-  private readonly BONE_INITIAL_Y = 1.5;
   private readonly GRAVITY = 9.8;
   private readonly RESPAWN_DELAY = 3.0;
   private bonePool: THREE.Group[] = [];
@@ -61,6 +69,9 @@ export class Stage {
   private boneBoundingBoxes = new Map<Bone, THREE.Box3>();
   private playerCache: WeakMap<Character, PlayerCache> = new WeakMap();
   private nameTagCache: WeakMap<Character, NameTagCache> = new WeakMap();
+  powerUps: PowerUp[] = [];
+  aiDogs: Character[] = [];
+  public isLayoutInitialized: boolean = false; // Track if we're using server layout
 
   // Shared geometries and materials for bones
   private static boneGeometry: THREE.CylinderGeometry;
@@ -68,17 +79,21 @@ export class Stage {
   private static boneMaterial: THREE.MeshPhongMaterial;
   private static boneBlinkingMaterial: THREE.MeshPhongMaterial;
 
+  private clippingPlanes: THREE.Plane[] = [];
+
   constructor(scene: THREE.Scene) {
     this.scene = scene;
     this.initSharedResources();
     this.createGround();
     this.createBoundaries();
-    this.createEnvironment();
-    this.createPlatforms();
     this.initBonePool();
     this.initSpawnLocations();
     this.initSpatialGrid();
-    this.spawnInitialBones();
+    
+    // Don't create stage elements yet - wait for server data
+    // this.createEnvironment();
+    // this.createPlatforms();
+    // this.spawnInitialBones();
   }
 
   private initSharedResources() {
@@ -170,77 +185,9 @@ export class Stage {
     this.scene.add(platform);
   }
 
-  private isPositionOccupied(position: THREE.Vector3, radius: number, existingPositions: Array<{ pos: THREE.Vector3, radius: number }>) {
-    for (const existing of existingPositions) {
-      const distance = position.distanceTo(existing.pos);
-      if (distance < (radius + existing.radius + 2)) { // +2 for minimum spacing
-        return true;
-      }
-    }
-    return false;
-  }
 
-  private getRandomPosition(radius: number, existingPositions: Array<{ pos: THREE.Vector3, radius: number }>, maxAttempts = 50): THREE.Vector3 | null {
-    const margin = radius + 2; // Add extra margin to ensure objects are not too close to boundaries
-    for (let i = 0; i < maxAttempts; i++) {
-      const position = new THREE.Vector3(
-        (Math.random() - 0.5) * (this.STAGE_SIZE - margin * 2),
-        0,
-        (Math.random() - 0.5) * (this.STAGE_SIZE - margin * 2)
-      );
-      
-      if (!this.isPositionOccupied(position, radius, existingPositions)) {
-        return position;
-      }
-    }
-    return null; // Could not find valid position
-  }
 
-  private createEnvironment() {
-    const existingPositions: Array<{ pos: THREE.Vector3, radius: number }> = [];
-    
-    // Add trees (8 trees with random scales)
-    for (let i = 0; i < 8; i++) {
-      const scale = 1.7 + Math.random() * 0.6; // Random scale between 1.7 and 2.3
-      const radius = 2 * scale; // Tree radius based on scale
-      
-      const position = this.getRandomPosition(radius, existingPositions);
-      if (position) {
-        this.createTree(position.x, position.z, scale);
-        existingPositions.push({ pos: position, radius });
-      }
-    }
 
-    // Add rocks (7 rocks with random scales)
-    for (let i = 0; i < 7; i++) {
-      const scale = 1.2 + Math.random() * 0.6; // Random scale between 1.2 and 1.8
-      const radius = scale;
-      
-      const position = this.getRandomPosition(radius, existingPositions);
-      if (position) {
-        this.createRock(position.x, position.z, scale);
-        existingPositions.push({ pos: position, radius });
-      }
-    }
-  }
-
-  private createPlatforms() {
-    const existingPositions: Array<{ pos: THREE.Vector3, radius: number }> = [];
-    const PLATFORM_HEIGHT = 2; // Lowered from 4 to 2 to be reachable with current jump height
-    
-    // Create 6 elevated platforms with standard height
-    for (let i = 0; i < 6; i++) {
-      const width = 4 + Math.random() * 4; // Random width between 4 and 8
-      const depth = 4 + Math.random() * 4; // Random depth between 4 and 8
-      const radius = Math.max(width, depth) / 2;
-      
-      const position = this.getRandomPosition(radius, existingPositions);
-      if (position) {
-        this.createPlatform(position.x, PLATFORM_HEIGHT, position.z, width, 1, depth);
-        existingPositions.push({ pos: position, radius });
-      }
-    }
-  }
 
   private createBoundaries() {
     const wallGeometry = new THREE.BoxGeometry(1, 4, this.STAGE_SIZE);
@@ -266,39 +213,54 @@ export class Stage {
   }
 
   private initBonePool() {
+    // Initialize shared geometries if not already done
+    if (!Stage.boneGeometry) {
+      this.initSharedResources();
+    }
+
+    // Clear existing pool and active bones
+    this.bonePool = [];
+    this.activeBones.clear();
+
+    // Create new bones for the pool
     for (let i = 0; i < this.BONE_POOL_SIZE; i++) {
       const bone = this.createBoneMesh();
       bone.visible = false;
+      bone.position.set(0, -1000, 0); // Move out of sight
       this.scene.add(bone);
       this.bonePool.push(bone);
     }
+    console.log('Initialized bone pool with size:', this.BONE_POOL_SIZE);
   }
 
   private getBoneFromPool(): THREE.Group | null {
-    for (let bone of this.bonePool) {
-      if (!bone.visible && !this.activeBones.has(bone)) {
-        bone.visible = true;
-        this.activeBones.add(bone);
-        return bone;
-      }
+    // First try to find an invisible bone
+    const availableBone = this.bonePool.find(bone => 
+      !bone.visible && !this.activeBones.has(bone)
+    );
+
+    if (availableBone) {
+      this.activeBones.add(availableBone);
+      availableBone.visible = true;
+      return availableBone;
     }
 
-    if (this.activeBones.size >= this.BONE_POOL_SIZE) {
-      const oldestBone = this.activeBones.values().next().value;
-      if (oldestBone) {
-        this.activeBones.delete(oldestBone);
-        oldestBone.visible = true;
-        this.activeBones.add(oldestBone);
-        return oldestBone;
-      }
+    // If no available bones, try to reuse the oldest active bone
+    if (this.bonePool.length > 0) {
+      const oldestBone = this.bonePool[0];
+      oldestBone.visible = true;
+      // Move bone to end of pool to maintain age order
+      this.bonePool.push(this.bonePool.shift()!);
+      return oldestBone;
     }
 
+    console.warn('No bones available in pool');
     return null;
   }
 
   private returnBoneToPool(bone: THREE.Group) {
     bone.visible = false;
-    bone.position.set(0, 0, 0);
+    bone.position.set(0, -1000, 0); // Move out of sight
     bone.rotation.set(0, 0, 0);
     this.activeBones.delete(bone);
   }
@@ -327,232 +289,171 @@ export class Stage {
     return boneGroup;
   }
 
-  private createBone(): Bone {
+  public createBone(position: THREE.Vector3): Bone {
     const boneGroup = this.getBoneFromPool();
     if (!boneGroup) {
+      console.warn('Could not get bone from pool, creating new one');
       return this.createBoneWithNewMesh();
-    }
-
-    let position = new THREE.Vector3();
-    let validPosition = false;
-    let maxAttempts = 50;
-
-    // Collect all possible spawn locations
-    const spawnLocations: { position: THREE.Vector3, weight: number }[] = [];
-    
-    // Add platform spawn locations (with higher weight for platforms)
-    for (const platform of this.platforms) {
-      const platformBox = new THREE.Box3().setFromObject(platform);
-      const platformTop = platformBox.max.y;
-      
-      // Add one spawn point per platform with moderate weight
-      const platformSpawn = new THREE.Vector3(
-        platformBox.min.x + Math.random() * (platformBox.max.x - platformBox.min.x),
-        platformTop + 0.5,
-        platformBox.min.z + Math.random() * (platformBox.max.z - platformBox.min.z)
-      );
-      spawnLocations.push({ position: platformSpawn, weight: 1.5 }); // Moderate weight for platforms
-    }
-    
-    // Add ground spawn locations (increased number for better ground coverage)
-    for (let i = 0; i < 8; i++) {
-      const groundSpawn = new THREE.Vector3(
-        (Math.random() - 0.5) * (this.STAGE_SIZE - 10), // Use fixed margin of 10 for bones
-        0.5,
-        (Math.random() - 0.5) * (this.STAGE_SIZE - 10)
-      );
-      spawnLocations.push({ position: groundSpawn, weight: 1.0 }); // Base weight for ground
-    }
-
-    // Shuffle and try spawn locations
-    while (!validPosition && maxAttempts > 0) {
-      // Select a spawn location based on weights
-      const totalWeight = spawnLocations.reduce((sum, loc) => sum + loc.weight, 0);
-      let randomWeight = Math.random() * totalWeight;
-      let selectedSpawn = spawnLocations[0].position;
-      
-      for (const location of spawnLocations) {
-        randomWeight -= location.weight;
-        if (randomWeight <= 0) {
-          selectedSpawn = location.position;
-          break;
-        }
-      }
-      
-      position = selectedSpawn.clone();
-
-      // Check for collisions with obstacles (trees and rocks)
-      let hasCollision = false;
-      const boneRadius = 0.5; // Approximate radius of the bone
-      const margin = 5.0; // Increased margin to prevent bones from spawning too close to boundaries or obstacles
-
-      for (const object of this.collidableObjects) {
-        // Skip platforms in collision check since we want to spawn on them
-        if (this.platforms.includes(object as THREE.Mesh)) continue;
-
-        const objectBox = new THREE.Box3().setFromObject(object);
-        const objectCenter = new THREE.Vector3();
-        objectBox.getCenter(objectCenter);
-
-        // Expand the object's bounds by the margin
-        objectBox.expandByScalar(margin + boneRadius);
-
-        // Check if the bone position would be inside the expanded bounds
-        if (objectBox.containsPoint(position)) {
-          hasCollision = true;
-          break;
-        }
-      }
-
-      if (!hasCollision) {
-        validPosition = true;
-      }
-
-      maxAttempts--;
-    }
-
-    // If no valid position found after max attempts, use a fallback position
-    if (!validPosition) {
-      position = new THREE.Vector3(0, 0.5, 0);
-    }
-
-    boneGroup.position.copy(position);
-    boneGroup.rotation.y = Math.random() * Math.PI * 2; // Random initial rotation
-    boneGroup.name = 'bone'; // Set name for identification
-    
-    this.scene.add(boneGroup);
-
-    return {
-      mesh: boneGroup,
-      position: position.clone(),
-      lastPosition: position.clone(),
-      collected: false,
-      timestamp: Date.now()
-    };
-  }
-
-  private createBoneWithNewMesh(): Bone {
-    const boneGroup = this.createBoneMesh();
-    let position = new THREE.Vector3();
-    let validPosition = false;
-    let maxAttempts = 50;
-
-    // Default position in case all attempts fail
-    position = new THREE.Vector3(0, 0.5, 0);
-
-    // Try to find a valid position
-    while (!validPosition && maxAttempts > 0) {
-        // Try a random position if spawn locations aren't initialized yet
-        if (!this.spawnLocations.length) {
-            position = new THREE.Vector3(
-                (Math.random() - 0.5) * (this.STAGE_SIZE - 10),
-                0.5,
-                (Math.random() - 0.5) * (this.STAGE_SIZE - 10)
-            );
-            validPosition = true;
-            break;
-        }
-
-        // Get random spawn location from available platforms
-        let randomWeight = Math.random() * this.totalSpawnWeight;
-        let selectedSpawn = this.spawnLocations[0].position;
-        
-        for (const location of this.spawnLocations) {
-            randomWeight -= location.weight;
-            if (randomWeight <= 0) {
-                selectedSpawn = location.position;
-                break;
-            }
-        }
-        
-        position = selectedSpawn.clone();
-
-        // Check for collisions with obstacles
-        let hasCollision = false;
-        const boneRadius = 0.5;
-        const margin = 1.0;
-
-        for (const object of this.collidableObjects) {
-            if (this.platforms.includes(object as THREE.Mesh)) continue;
-
-            const objectBox = new THREE.Box3().setFromObject(object);
-            const objectCenter = new THREE.Vector3();
-            objectBox.getCenter(objectCenter);
-            objectBox.expandByScalar(margin + boneRadius);
-
-            if (objectBox.containsPoint(position)) {
-                hasCollision = true;
-                break;
-            }
-        }
-
-        if (!hasCollision) {
-            validPosition = true;
-        }
-
-        maxAttempts--;
     }
 
     boneGroup.position.copy(position);
     boneGroup.rotation.y = Math.random() * Math.PI * 2;
-    this.scene.add(boneGroup);
-
-    return {
-        mesh: boneGroup,
-        position: position.clone(),
-        lastPosition: position.clone(),
-        collected: false,
-        timestamp: Date.now()
+    boneGroup.visible = true;
+    
+    // Ensure the bone is in the scene
+    if (!this.scene.getObjectById(boneGroup.id)) {
+      this.scene.add(boneGroup);
+    }
+    
+    const bone: Bone = {
+      id: Math.random().toString(36).substr(2, 9),
+      mesh: boneGroup,
+      position: position.clone(),
+      collected: false,
+      timestamp: Date.now(),
+      lastPosition: position.clone(),
+      boundingBox: new THREE.Box3().setFromObject(boneGroup)
     };
+    
+    // Add to spatial grid immediately
+    this.updateBoneSpatialPosition(bone);
+    
+    return bone;
+  }
+
+  private createBoneWithNewMesh(): Bone {
+    const boneGroup = this.createBoneMesh();
+    const position = new THREE.Vector3();
+    
+    // Try to find a valid position
+    const margin = 5;
+    const stageMargin = 10;
+    let attempts = 50;
+    
+    while (attempts > 0) {
+      position.set(
+        (Math.random() - 0.5) * (this.STAGE_SIZE - stageMargin * 2),
+        0.5,
+        (Math.random() - 0.5) * (this.STAGE_SIZE - stageMargin * 2)
+      );
+      
+      // Check for collisions with obstacles
+      let validPosition = true;
+      for (const object of this.collidableObjects) {
+        const objectBox = new THREE.Box3().setFromObject(object);
+        const objectCenter = new THREE.Vector3();
+        objectBox.getCenter(objectCenter);
+        
+        if (position.distanceTo(objectCenter) < margin) {
+          validPosition = false;
+          break;
+        }
+      }
+      
+      if (validPosition) break;
+      attempts--;
+    }
+    
+    boneGroup.position.copy(position);
+    boneGroup.rotation.y = Math.random() * Math.PI * 2;
+    boneGroup.visible = true;
+    this.scene.add(boneGroup);
+    
+    const bone: Bone = {
+      id: Math.random().toString(36).substr(2, 9),
+      mesh: boneGroup,
+      position: position.clone(),
+      collected: false,
+      timestamp: Date.now(),
+      lastPosition: position.clone(),
+      boundingBox: new THREE.Box3().setFromObject(boneGroup)
+    };
+    
+    return bone;
   }
 
   private spawnInitialBones() {
-    for (let i = 0; i < this.TARGET_BONES; i++) {
-      this.bones.push(this.createBone());
+    // Clear any existing bones first
+    this.bones.forEach(bone => {
+      this.cleanupBone(bone);
+    });
+    this.bones = [];
+    
+    console.log('Spawning initial bones:', this.TARGET_BONES);
+    const stageMargin = 10; // Distance from stage edges
+    const positions: THREE.Vector3[] = [];
+
+    // Create a grid of possible positions
+    const gridSize = Math.ceil(Math.sqrt(this.TARGET_BONES * 2)); // Multiply by 2 to have more positions than needed
+    const spacing = (this.STAGE_SIZE - stageMargin * 2) / gridSize;
+
+    for (let x = 0; x < gridSize; x++) {
+      for (let z = 0; z < gridSize; z++) {
+        const xPos = -this.STAGE_SIZE/2 + stageMargin + x * spacing + Math.random() * spacing;
+        const zPos = -this.STAGE_SIZE/2 + stageMargin + z * spacing + Math.random() * spacing;
+        positions.push(new THREE.Vector3(xPos, 0.5, zPos));
+      }
     }
+
+    // Shuffle positions
+    for (let i = positions.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [positions[i], positions[j]] = [positions[j], positions[i]];
+    }
+
+    // Use the first TARGET_BONES positions
+    let bonesCreated = 0;
+    for (let i = 0; i < positions.length && bonesCreated < this.TARGET_BONES; i++) {
+      const bone = this.createBone(positions[i]);
+      if (bone) {
+        this.bones.push(bone);
+        bonesCreated++;
+      }
+    }
+    console.log('Total bones created:', this.bones.length);
   }
 
   createPlayer(name: string, colorIndex: number): Character {
     const player = new Character(false, colorIndex, name);
     const safePosition = this.findSafeRespawnLocation();
-    player.state.position = {
-        x: safePosition.x,
-        y: safePosition.y,
-        z: safePosition.z
-    };
+    player.state.position = new THREE.Vector3(
+      safePosition.x,
+      safePosition.y,
+      safePosition.z
+    );
     player.updateDogPosition();
     this.players.push(player);
     this.scene.add(player.dog);
-    this.createNameTag(player);
+    this.createNameTag(player, player.state.name);
     return player;
   }
 
   createAIDogs() {
-    // Create a pool of available names
     const availableNames = [...dogNames.names];
     
-    // Create AI dogs with more varied starting positions
     for (let i = 1; i < 10; i++) {
-        // Get a random name from the available pool
-        const nameIndex = Math.floor(Math.random() * availableNames.length);
-        const name = availableNames.splice(nameIndex, 1)[0];
-        
-        const aiDog = new Character(true, i, name);
-        const safePosition = this.findSafeRespawnLocation();
-        aiDog.state.position = {
-            x: safePosition.x,
-            y: safePosition.y,
-            z: safePosition.z
-        };
-        aiDog.updateDogPosition();
-        this.players.push(aiDog);
-        this.scene.add(aiDog.dog);
-        this.createNameTag(aiDog);
+      const nameIndex = Math.floor(Math.random() * availableNames.length);
+      const name = availableNames.splice(nameIndex, 1)[0];
+      
+      const aiDog = new Character(true, i % Character.DOG_COLORS.length, name);
+      const safePosition = this.findSafeRespawnLocation();
+      aiDog.state.position = new THREE.Vector3(
+        safePosition.x,
+        safePosition.y,
+        safePosition.z
+      );
+      aiDog.state.id = `ai_${i}`; // Add unique ID for AI dogs
+      aiDog.updateDogPosition();
+      
+      this.players.push(aiDog);
+      this.scene.add(aiDog.dog);
+      this.createNameTag(aiDog, aiDog.state.name);
     }
   }
 
-  createNameTag(character: Character) {
+  createNameTag(character: Character, tagId: string) {
     const nameTag = document.createElement('div');
+    nameTag.id = tagId;
     nameTag.style.position = 'absolute';
     nameTag.style.transform = 'translate(-50%, -50%)';
     nameTag.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
@@ -666,10 +567,8 @@ export class Stage {
     return this.platforms;
   }
 
-  private createDroppingBone(position: THREE.Vector3, velocity: THREE.Vector3): DroppingBone {
-    const bone = this.createBone();
-    bone.mesh.position.copy(position);
-    bone.mesh.position.y = this.BONE_INITIAL_Y;
+  private createDroppingBone(position: THREE.Vector3, velocity: THREE.Vector3): DroppingBone | undefined {
+    const bone = this.createBone(position);
     bone.lifespan = 12000; // 12 seconds total: 10 seconds visible + 2 seconds blinking
     
     // Ensure the bone is properly tracked in the scene
@@ -690,83 +589,43 @@ export class Stage {
     };
   }
 
-  private findSafeRespawnLocation(): THREE.Vector3 {
+  public findSafeRespawnLocation(): THREE.Vector3 {
     const margin = 7; // Increased minimum distance from other objects
     const maxAttempts = 100; // Increased max attempts
     const gridSize = 10; // Number of grid sections to try
     
     // Try random positions first
     for (let attempt = 0; attempt < maxAttempts / 2; attempt++) {
-        // Generate random position within bounds, avoiding the very edges
-        const position = new THREE.Vector3(
-            (Math.random() - 0.5) * (this.STAGE_SIZE - 30),
-            0.5,
-            (Math.random() - 0.5) * (this.STAGE_SIZE - 30)
-        );
+      // Generate random position within bounds, avoiding the very edges
+      const position = new THREE.Vector3(
+        (Math.random() - 0.5) * (this.STAGE_SIZE - 30),
+        0.5,
+        (Math.random() - 0.5) * (this.STAGE_SIZE - 30)
+      );
 
-        if (this.isPositionSafe(position, margin)) {
-            return position;
-        }
+      if (this.isPositionSafe(position, margin)) {
+        return position;
+      }
     }
 
     // If random attempts fail, try grid-based approach
     const sectionSize = (this.STAGE_SIZE - 30) / gridSize;
     for (let x = 0; x < gridSize; x++) {
-        for (let z = 0; z < gridSize; z++) {
-            const position = new THREE.Vector3(
-                (-this.STAGE_SIZE / 2 + 15 + x * sectionSize + Math.random() * sectionSize),
-                0.5,
-                (-this.STAGE_SIZE / 2 + 15 + z * sectionSize + Math.random() * sectionSize)
-            );
-
-            if (this.isPositionSafe(position, margin)) {
-                return position;
-            }
-        }
-    }
-
-    // If all else fails, find the position furthest from all objects
-    let bestPosition = new THREE.Vector3(0, 0.5, 0);
-    let maxMinDistance = 0;
-
-    for (let attempt = 0; attempt < 20; attempt++) {
+      for (let z = 0; z < gridSize; z++) {
         const position = new THREE.Vector3(
-            (Math.random() - 0.5) * (this.STAGE_SIZE - 30),
-            0.5,
-            (Math.random() - 0.5) * (this.STAGE_SIZE - 30)
+          (-this.STAGE_SIZE / 2 + 15 + x * sectionSize + Math.random() * sectionSize),
+          0.5,
+          (-this.STAGE_SIZE / 2 + 15 + z * sectionSize + Math.random() * sectionSize)
         );
 
-        let minDistance = Infinity;
-        
-        // Check distance from collidable objects
-        for (const object of this.collidableObjects) {
-            const objectBox = new THREE.Box3().setFromObject(object);
-            const objectCenter = new THREE.Vector3();
-            objectBox.getCenter(objectCenter);
-            const distance = position.distanceTo(objectCenter);
-            minDistance = Math.min(minDistance, distance);
+        if (this.isPositionSafe(position, margin)) {
+          return position;
         }
-
-        // Check distance from other players
-        for (const player of this.players) {
-            if (!player.state.isDying) {
-                const playerPos = new THREE.Vector3(
-                    player.state.position.x,
-                    player.state.position.y,
-                    player.state.position.z
-                );
-                const distance = position.distanceTo(playerPos);
-                minDistance = Math.min(minDistance, distance);
-            }
-        }
-
-        if (minDistance > maxMinDistance) {
-            maxMinDistance = minDistance;
-            bestPosition = position;
-        }
+      }
     }
 
-    return bestPosition;
+    // If all else fails, return a default safe position
+    return new THREE.Vector3(0, 0.5, 0);
   }
 
   private isPositionSafe(position: THREE.Vector3, margin: number): boolean {
@@ -831,13 +690,12 @@ export class Stage {
     );
   }
 
-  private getGridCoordinates(position: THREE.Vector3): { x: number; z: number } {
-    const halfSize = (this.GRID_SIZE * this.CELL_SIZE) / 2;
-    const x = Math.floor((position.x + halfSize) / this.CELL_SIZE);
-    const z = Math.floor((position.z + halfSize) / this.CELL_SIZE);
+  private getGridCoordinates(position: { x: number; y: number; z: number }) {
+    const x = Math.floor((position.x + this.STAGE_SIZE / 2) / this.CELL_SIZE);
+    const z = Math.floor((position.z + this.STAGE_SIZE / 2) / this.CELL_SIZE);
     return {
-      x: Math.max(0, Math.min(this.GRID_SIZE - 1, x)),
-      z: Math.max(0, Math.min(this.GRID_SIZE - 1, z))
+      x: Math.max(0, Math.min(x, this.GRID_SIZE - 1)),
+      z: Math.max(0, Math.min(z, this.GRID_SIZE - 1))
     };
   }
 
@@ -874,18 +732,18 @@ export class Stage {
     bone.lastPosition.copy(bone.position);
   }
 
-  private getNearbyBones(position: THREE.Vector3, radius: number = this.CELL_SIZE): Bone[] {
-    const { x, z } = this.getGridCoordinates(position);
+  private getNearbyBones(playerPos: { x: number; y: number; z: number }): Bone[] {
+    // Convert grid coordinates
+    const { x: gridX, z: gridZ } = this.getGridCoordinates(playerPos);
+    
+    // Get bones from surrounding cells
     const nearbyBones: Bone[] = [];
-    const searchRadius = Math.ceil(radius / this.CELL_SIZE);
-
-    for (let i = -searchRadius; i <= searchRadius; i++) {
-      for (let j = -searchRadius; j <= searchRadius; j++) {
-        const gridX = x + i;
-        const gridZ = z + j;
-        
-        if (gridX >= 0 && gridX < this.GRID_SIZE && gridZ >= 0 && gridZ < this.GRID_SIZE) {
-          this.spatialGrid[gridX][gridZ].forEach(bone => {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const x = gridX + dx;
+        const z = gridZ + dz;
+        if (x >= 0 && x < this.GRID_SIZE && z >= 0 && z < this.GRID_SIZE) {
+          this.spatialGrid[x][z].forEach(bone => {
             if (!bone.collected) {
               nearbyBones.push(bone);
             }
@@ -893,7 +751,6 @@ export class Stage {
         }
       }
     }
-
     return nearbyBones;
   }
 
@@ -952,6 +809,11 @@ export class Stage {
         bone.position.copy(bone.mesh.position);
         this.updateBoneSpatialPosition(bone);
 
+        // Spin uncollected bones
+        if (!bone.collected) {
+          bone.mesh.rotation.y += deltaTime * 2; // Spin at 2 radians per second
+        }
+
         // Check for expired bones
         if (bone.lifespan) {
           const timeLeft = bone.lifespan - (Date.now() - bone.timestamp);
@@ -978,13 +840,6 @@ export class Stage {
                 }
               });
             }
-          } else {
-            // Ensure bone uses regular material during the first 10 seconds
-            bone.mesh.traverse((child) => {
-              if (child instanceof THREE.Mesh && child.material !== Stage.boneMaterial) {
-                child.material = Stage.boneMaterial;
-              }
-            });
           }
         }
       }
@@ -1060,6 +915,7 @@ export class Stage {
         // Only add to regular bones if not in collection delay and not already collected
         if ((!bone.collectionDelay || bone.collectionDelay <= 0) && !bone.collected) {
           const landedBone: Bone = {
+            id: bone.id,
             mesh: bone.mesh,
             position: bone.position.clone(),
             collected: false,
@@ -1090,11 +946,7 @@ export class Stage {
         const playerBox = this.updatePlayerBoundingBox(player);
         if (!playerBox) continue;
 
-        const nearbyBones = this.getNearbyBones(new THREE.Vector3(
-          player.state.position.x,
-          player.state.position.y,
-          player.state.position.z
-        ));
+        const nearbyBones = this.getNearbyBones(player.state.position);
 
         for (const bone of nearbyBones) {
           if (!bone.collected && 
@@ -1119,6 +971,16 @@ export class Stage {
               bone.collected = true;
               this.cleanupBone(bone);
               player.collectBone();
+              
+              // Notify server about collected bone
+              const networkManager = NetworkManager.getInstance();
+              if (networkManager && networkManager.isConnected()) {
+                networkManager.updatePlayerState({
+                  id: player.state.id,
+                  bones: player.state.bones,
+                  size: player.state.size
+                });
+              }
 
               if (player.state.bones >= 100) {
                 player.state.bones = 100;
@@ -1223,7 +1085,7 @@ export class Stage {
     this.spawnInitialBones();
   }
 
-  update(deltaTime: number, keys: { [key: string]: boolean }, camera: THREE.Camera) {
+  update(deltaTime: number, _keys: { [key: string]: boolean }, camera: THREE.Camera) {
     // Update TWEEN animations
     TWEEN.update();
 
@@ -1231,24 +1093,7 @@ export class Stage {
     const hasWinner = this.players.some(player => player.state.hasWon);
     if (hasWinner) {
       // Only update nametags when game is frozen
-      const tempVector = new THREE.Vector3();
-      for (const player of this.players) {
-        const nameTag = this.nameTags[player.state.name];
-        if (nameTag) {
-          tempVector.set(
-            player.state.position.x,
-            player.state.position.y + 1.5 + player.state.size,
-            player.state.position.z
-          );
-          tempVector.project(camera);
-
-          const x = (tempVector.x * 0.5 + 0.5) * window.innerWidth;
-          const y = (-tempVector.y * 0.5 + 0.5) * window.innerHeight;
-
-          nameTag.style.transform = `translate(${x}px, ${y}px)`;
-          nameTag.textContent = `${player.state.name} (${player.state.bones}${player.state.hasWon ? ' - WINNER!' : ''})`;
-        }
-      }
+      this.updateNameTags(camera);
       return; // Exit early to freeze all game activity
     }
 
@@ -1261,39 +1106,38 @@ export class Stage {
     
     // Always spawn new permanent bones if we're below target and no winner
     if (permanentBones < this.TARGET_BONES && !hasWinner) {
-      // Calculate exact number needed to reach target
       const bonesToSpawn = this.TARGET_BONES - permanentBones;
-      
-      // Spawn all needed bones immediately to maintain minimum
       for (let i = 0; i < bonesToSpawn; i++) {
-        const newBone = this.createBone();
-        // Ensure no lifespan for permanent bones
-        delete newBone.lifespan;
-        this.bones.push(newBone);
+        const position = this.findSafeRespawnLocation();
+        const bone = this.createBone(position);
+        if (bone) {
+          this.bones.push(bone);
+        }
       }
     }
 
-    // Update dropping bones with optimized physics
+    // Update bones with optimized physics
     this.updateBones(deltaTime);
 
-    // Spin only uncollected bones
-    for (const bone of this.bones) {
-      if (!bone.collected) {
-        bone.mesh.rotation.y += deltaTime;
-      }
-    }
-
     // Cache bounding boxes for collision detection
-    const playerBoundingBoxes = new Map<Character, THREE.Box3>();
     const collidableBoxes = this.collidableObjects.map(obj => new THREE.Box3().setFromObject(obj));
 
     // Create array of all bones for AI targeting
-    const allBones = [...this.bones, ...this.droppingBones].filter(bone => !bone.collected).map(bone => bone.mesh);
-
-    // Update players with optimized collision checks
+    const allBones = [...this.bones, ...this.droppingBones]
+      .filter(bone => !bone.collected)
+      .map(bone => bone.mesh);
+    
+    // IMPORTANT: We're not controlling any players here - just handling non-input updates
+    // like collision detection. Player input is managed by Game.tsx for the local player only.
+    
+    // Process non-input physics and collisions for all players
     for (const player of this.players) {
+      // Use empty keys for ALL players - no input handling in Stage
+      const emptyKeys = {};
+      
       if (player.state.isDying) {
-        player.update(keys, deltaTime, [], undefined, this.players);
+        // Only handle dying animation
+        player.update(emptyKeys, deltaTime, [], undefined, this.players);
       } else {
         const otherPlayers = this.players
           .filter(p => p !== player && !p.state.isDying)
@@ -1308,10 +1152,8 @@ export class Stage {
           if (!bone.name) bone.name = 'bone';
         });
         
-        player.update(keys, deltaTime, allCollidables, allBoxes, this.players);
-        
-        // Cache bounding box for later use
-        playerBoundingBoxes.set(player, new THREE.Box3().setFromObject(player.dog));
+        // Only process collision detection and physics
+        player.update(emptyKeys, deltaTime, allCollidables, allBoxes, this.players);
       }
     }
 
@@ -1348,7 +1190,7 @@ export class Stage {
         deadDog.updateDogPosition();
         this.scene.add(deadDog.dog);
         this.players.push(deadDog);
-        this.createNameTag(deadDog);
+        this.createNameTag(deadDog, deadDog.state.name);
       }, this.RESPAWN_DELAY * 1000);
     }
 
@@ -1462,7 +1304,12 @@ export class Stage {
 
     // Create bone explosion if any bones were dropped
     if (droppedBones > 0) {
-      this.createBonePile(victim.state.position, droppedBones, 5);
+      const victimPos = new THREE.Vector3(
+        victim.state.position.x,
+        victim.state.position.y,
+        victim.state.position.z
+      );
+      this.createBonePile(victimPos, droppedBones, 5);
     }
 
     // Update nametag with new stats
@@ -1473,8 +1320,7 @@ export class Stage {
   }
 
   // Helper method to create bone piles
-  private createBonePile(position: { x: number, y: number, z: number }, count: number, baseVelocity: number) {
-    // Limit the number of bones to prevent pool exhaustion
+  private createBonePile(position: THREE.Vector3, count: number, baseVelocity: number) {
     const actualCount = Math.min(count, this.MAX_EXPLOSION_BONES);
     
     for (let i = 0; i < actualCount; i++) {
@@ -1487,13 +1333,143 @@ export class Stage {
         Math.sin(angle) * baseVelocity * randomRadius
       );
 
-      const bone = this.createDroppingBone(
-        new THREE.Vector3(position.x, position.y, position.z),
-        velocity
-      );
+      const bone = this.createDroppingBone(position.clone(), velocity);
+      
       if (bone) {
         this.droppingBones.push(bone);
       }
     }
+  }
+
+  createPowerUp(type: string, position: THREE.Vector3): PowerUp {
+    const powerUp = {
+      id: Math.random().toString(36).substr(2, 9),
+      type,
+      mesh: new THREE.Mesh(),
+      position: position.clone()
+    };
+    this.powerUps.push(powerUp);
+    return powerUp;
+  }
+
+  createAIDog(colorIndex: number) {
+    const aiDog = new Character(true, colorIndex);
+    this.aiDogs.push(aiDog);
+    this.scene.add(aiDog.dog);
+    return aiDog;
+  }
+
+  public updateBonePosition(bone: Bone, position: THREE.Vector3) {
+    bone.position.copy(position);
+    bone.mesh.position.copy(position);
+  }
+
+  public updateBounds(min: THREE.Vector3, max: THREE.Vector3) {
+    // Update clipping planes for the stage boundaries
+    this.clippingPlanes = [
+      new THREE.Plane(new THREE.Vector3(1, 0, 0), max.x),   // Right wall
+      new THREE.Plane(new THREE.Vector3(-1, 0, 0), -min.x), // Left wall
+      new THREE.Plane(new THREE.Vector3(0, 0, 1), max.z),   // Front wall
+      new THREE.Plane(new THREE.Vector3(0, 0, -1), -min.z)  // Back wall
+    ];
+
+    // Update any materials that use clipping planes
+    this.updateMaterialClipping();
+  }
+
+  private updateMaterialClipping() {
+    this.scene.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        const material = object.material as THREE.Material;
+        if (material) {
+          material.clippingPlanes = this.clippingPlanes;
+          material.needsUpdate = true;
+        }
+      }
+    });
+  }
+
+  // Initialize stage layout from server data
+  public initializeFromServerLayout(serverLayout: any): void {
+    if (this.isLayoutInitialized) {
+      console.warn('Stage layout already initialized, ignoring server layout');
+      return;
+    }
+
+    console.log('Initializing stage from server layout with seed:', serverLayout.seed);
+    
+    // Clear any existing layout
+    this.clearExistingLayout();
+    
+    // Create trees from server layout
+    serverLayout.trees.forEach((tree: any) => {
+      this.createTree(tree.position.x, tree.position.z, tree.scale);
+    });
+    
+    // Create rocks from server layout
+    serverLayout.rocks.forEach((rock: any) => {
+      this.createRock(rock.position.x, rock.position.z, rock.scale);
+    });
+    
+    // Create platforms from server layout
+    serverLayout.platforms.forEach((platform: any) => {
+      this.createPlatform(
+        platform.position.x,
+        platform.position.y,
+        platform.position.z,
+        platform.width,
+        platform.height,
+        platform.depth
+      );
+    });
+    
+    // Create walls from server layout
+    serverLayout.walls.forEach((wall: any) => {
+      this.createWall(
+        wall.position.x,
+        wall.position.y,
+        wall.position.z,
+        wall.width,
+        wall.height,
+        wall.depth
+      );
+    });
+    
+    // Mark layout as initialized
+    this.isLayoutInitialized = true;
+    console.log('Stage layout initialized from server');
+  }
+  
+  // Create a wall mesh for boundaries
+  private createWall(x: number, y: number, z: number, width: number, height: number, depth: number): THREE.Mesh {
+    const geometry = new THREE.BoxGeometry(width, height, depth);
+    const material = new THREE.MeshPhongMaterial({ 
+      color: 0x808080, // Gray color to match original walls
+      side: THREE.DoubleSide
+    });
+    
+    const wall = new THREE.Mesh(geometry, material);
+    wall.position.set(x, y, z);
+    wall.castShadow = true;
+    wall.receiveShadow = true;
+    wall.name = "wall"; // Identify as a wall object
+    
+    this.scene.add(wall);
+    return wall;
+  }
+  
+  // Clear any existing layout elements
+  private clearExistingLayout(): void {
+    // Remove all existing environment objects
+    this.collidableObjects.forEach(obj => {
+      this.scene.remove(obj);
+    });
+    this.collidableObjects = [];
+    
+    // Clear platforms
+    this.platforms.forEach(platform => {
+      this.scene.remove(platform);
+    });
+    this.platforms = [];
   }
 }
